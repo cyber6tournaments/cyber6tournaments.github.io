@@ -1082,7 +1082,7 @@ function getDevSiteConfig() {
     adEnabled: true,
     adTitle: "Здесь могла бы быть ваша реклама",
     adSub: "Рекламный щит • Cyber 6 Tournament",
-    adUrl: "https://t.me/kas_0ff",
+    adUrl: "https://t.me/kascheff",
     newsBadge: "ОБТ • 1 ДЕКАБРЯ",
     newsTitle: "СТАРТ CYBER 6 TOURNAMENT",
     newsText: "Открытие платформы, верификация организаторов и первые кубки на Gold.",
@@ -4776,7 +4776,7 @@ function renderExtraSections() {
 
   if (selectedExtraSectionKey === "support") {
     const myTickets = currentUser ? cloudTickets.filter(t => t.authorUid === currentUser.uid || t.uid === currentUser.uid) : [];
-    moreEl.innerHTML = `<div class="mirror-card"><div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;"><div><span class="crimson-live-badge"><span class="crimson-dot-pulse"></span> SUPPORT 24/7</span><h2 style="font-family:var(--font-display); font-size:22px; font-weight:900; margin-top:8px;">ТЕХНИЧЕСКАЯ ПОДДЕРЖКА</h2></div><a href="https://t.me/kas_0ff" target="_blank" rel="noopener" class="social-auth-btn" style="flex:0 0 auto; padding:9px 16px; text-decoration:none;">Связаться с администратором</a></div><form onsubmit="window.submitSupportTicket(event)" class="glass-subcard" style="margin-bottom:16px;"><div class="auth-form-group"><label class="auth-label">Категория</label><input type="hidden" id="sup-cat" value="Спорный матч"><div class="glass-select-wrap" id="sup-cat-dd"><button type="button" class="glass-select-trigger" onclick="window.toggleGlassDropdown('sup-cat-dd', event)"><span id="sup-cat-lbl">Спорный матч</span><i class="fas fa-chevron-down" style="font-size:11px; color:var(--accent-soft);"></i></button><div class="glass-select-menu">${["Спорный матч", "Смена Standoff 2 ID", "Жалоба на организатора", "Технический вопрос"].map(c => `<button type="button" class="glass-select-option" onclick="window.selectGlassDropdownOption('sup-cat-dd','sup-cat','sup-cat-lbl','${c}')">${c}</button>`).join("")}</div></div></div><div class="auth-form-group"><label class="auth-label">Сообщение</label><textarea id="sup-msg" class="auth-input" rows="3" style="padding:11px 14px;" required></textarea></div><button type="submit" class="auth-submit-btn">ОТПРАВИТЬ</button></form>${myTickets.map(t => `<div class="glass-subcard" style="margin-bottom:8px;"><b style="color:var(--accent-soft);">${escapeHTML(t.category)}</b><div style="font-size:12px; color:var(--white-soft); margin-top:3px;">${escapeHTML(t.message)}</div></div>`).join("")}</div>`;
+    moreEl.innerHTML = `<div class="mirror-card"><div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;"><div><span class="crimson-live-badge"><span class="crimson-dot-pulse"></span> SUPPORT 24/7</span><h2 style="font-family:var(--font-display); font-size:22px; font-weight:900; margin-top:8px;">ТЕХНИЧЕСКАЯ ПОДДЕРЖКА</h2></div><a href="https://t.me/kascheff" target="_blank" rel="noopener" class="social-auth-btn" style="flex:0 0 auto; padding:9px 16px; text-decoration:none;">Связаться с администратором</a></div><form onsubmit="window.submitSupportTicket(event)" class="glass-subcard" style="margin-bottom:16px;"><div class="auth-form-group"><label class="auth-label">Категория</label><input type="hidden" id="sup-cat" value="Спорный матч"><div class="glass-select-wrap" id="sup-cat-dd"><button type="button" class="glass-select-trigger" onclick="window.toggleGlassDropdown('sup-cat-dd', event)"><span id="sup-cat-lbl">Спорный матч</span><i class="fas fa-chevron-down" style="font-size:11px; color:var(--accent-soft);"></i></button><div class="glass-select-menu">${["Спорный матч", "Смена Standoff 2 ID", "Жалоба на организатора", "Технический вопрос"].map(c => `<button type="button" class="glass-select-option" onclick="window.selectGlassDropdownOption('sup-cat-dd','sup-cat','sup-cat-lbl','${c}')">${c}</button>`).join("")}</div></div></div><div class="auth-form-group"><label class="auth-label">Сообщение</label><textarea id="sup-msg" class="auth-input" rows="3" style="padding:11px 14px;" required></textarea></div><button type="submit" class="auth-submit-btn">ОТПРАВИТЬ</button></form>${myTickets.map(t => `<div class="glass-subcard" style="margin-bottom:8px;"><b style="color:var(--accent-soft);">${escapeHTML(t.category)}</b><div style="font-size:12px; color:var(--white-soft); margin-top:3px;">${escapeHTML(t.message)}</div></div>`).join("")}</div>`;
     return;
   }
 
@@ -4960,7 +4960,7 @@ function renderExtraSections() {
           </div>
           <div class="auth-form-group" style="margin:0;">
             <label class="auth-label">Ссылка кнопки «Заказать»</label>
-            <input type="text" id="dev-ad-url" class="auth-input" style="padding-left:12px;" value="${escapeHTML(devCfg.adUrl)}" placeholder="https://t.me/kas_0ff">
+            <input type="text" id="dev-ad-url" class="auth-input" style="padding-left:12px;" value="${escapeHTML(devCfg.adUrl)}" placeholder="https://t.me/kascheff">
           </div>
           <div class="auth-form-group" style="margin:0;">
             <label class="auth-label">Бейдж главного анонса</label>
