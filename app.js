@@ -4,7 +4,7 @@
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js";
 import {
-  getFirestore, doc, collection, onSnapshot, setDoc, deleteDoc,
+  getFirestore, doc, getDoc, collection, onSnapshot, setDoc, deleteDoc,
   writeBatch, serverTimestamp, query, where, orderBy, limit
 } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore.js";
 import {
@@ -850,7 +850,7 @@ window.showMirrorToast = (msg, isError = false) => {
 
 function getPlayerClan(userObj) {
   if (!userObj || !userObj.clanId) return null;
-  return cloudClans.find(c => (userObj.clanId && c.id === userObj.clanId) || (Array.isArray(c.members) && c.members.some(m => m && m.uid === userObj.uid))) || null;
+  return cloudClans.find(c => c.leaderUid === userObj.uid || (userObj.clanId && c.id === userObj.clanId) || (Array.isArray(c.members) && c.members.some(m => m && m.uid === userObj.uid))) || null;
 }
 
 function loadSavedUserSession() {
@@ -858,11 +858,13 @@ function loadSavedUserSession() {
     [
       "c6e_stage3_users", "c6e_stage3_clans", "c6e_stage3_tournaments",
       "c6e_stage3_matches", "c6e_stage3_tickets", "c6e_stage3_gchat",
-      "c6e_stage3_dms", "c6e_stage3_notifs", "c6e_stage3_current_user"
+      "c6e_stage3_dms", "c6e_stage3_notifs", "c6e_active_user_v29"
     ].forEach(k => {
       localStorage.removeItem(k);
       sessionStorage.removeItem(k);
     });
+    const cached = localStorage.getItem("c6e_active_user_v29") || sessionStorage.getItem("c6e_active_user_v29");
+    if (cached) currentUser = JSON.parse(cached);
   } catch (e) {}
 }
 
@@ -1004,7 +1006,7 @@ function saveCurrentUserEverywhere() {
   const idx = cloudUsers.findIndex(u => u.uid === currentUser.uid);
   if (idx >= 0) cloudUsers[idx] = currentUser;
   else cloudUsers.push(currentUser);
-  try { localStorage.setItem("c6e_stage3_current_user", JSON.stringify(currentUser)); } catch (e) {}
+  try { localStorage.setItem("c6e_active_user_v29", JSON.stringify(currentUser)); } catch (e) {}
   syncArenaDataToCloud();
   updateTopRightPlayerUI();
   renderAllStageSections();
@@ -1026,7 +1028,7 @@ onSnapshot(collection(db, "users"), (snap) => {
     const fresh = cloudUsers.find(u => u.uid === currentUser.uid);
     if (fresh) {
       currentUser = fresh;
-      try { localStorage.setItem("c6e_stage3_current_user", JSON.stringify(currentUser)); } catch (e) {}
+      try { localStorage.setItem("c6e_active_user_v29", JSON.stringify(currentUser)); } catch (e) {}
       updateTopRightPlayerUI();
     }
   }
@@ -1164,16 +1166,25 @@ onAuthStateChanged(auth, async (fbUser) => {
     _stopPrivateListeners();
     if (currentUser) {
       currentUser = null;
-      localStorage.removeItem("c6e_stage3_current_user");
-      sessionStorage.removeItem("c6e_stage3_current_user");
+      try {
+        localStorage.removeItem("c6e_active_user_v29");
+        sessionStorage.removeItem("c6e_active_user_v29");
+      } catch (e) {}
       updateTopRightPlayerUI();
       renderAllStageSections();
     }
     return;
   }
+
   const emailLower = String(fbUser.email || "").toLowerCase();
   const isFounderEmail = emailLower === FOUNDER_ADMIN_EMAIL;
-  let existing = cloudUsers.find(u => u.uid === fbUser.uid);
+  let existing = null;
+  try {
+    const snap = await getDoc(doc(db, "users", fbUser.uid));
+    if (snap.exists()) existing = { uid: fbUser.uid, ...snap.data() };
+  } catch (e) {}
+  if (!existing) existing = cloudUsers.find(u => u.uid === fbUser.uid) || null;
+
   if (!existing && isFounderEmail) {
     existing = ensureFounderAdminExists();
     if (existing) {
@@ -1185,9 +1196,15 @@ onAuthStateChanged(auth, async (fbUser) => {
       existing.isAdmin = true;
       existing.isVerifiedOrganizer = true;
     }
+    const idx = cloudUsers.findIndex(u => u.uid === fbUser.uid);
+    if (idx >= 0) cloudUsers[idx] = existing;
+    else cloudUsers.push(existing);
     currentUser = existing;
-    try { localStorage.setItem("c6e_stage3_current_user", JSON.stringify(currentUser)); } catch (e) {}
+    try { localStorage.setItem("c6e_active_user_v29", JSON.stringify(currentUser)); } catch (e) {}
     updateTopRightPlayerUI();
+    if (window.location.pathname === "/authorization" || document.body.classList.contains("on-login-route")) {
+      activateRouteView("/feed", false);
+    }
   }
   _startPrivateListeners(fbUser.uid, Boolean(isFounderEmail || (existing && existing.isAdmin)));
   renderAllStageSections();
@@ -2167,7 +2184,7 @@ window.logoutCurrentUser = async () => {
   _stopPrivateListeners();
   try { await signOut(auth); } catch (e) {}
   currentUser = null; viewedProfileUid = null; viewedClanId = null;
-  localStorage.removeItem("c6e_stage3_current_user"); sessionStorage.removeItem("c6e_stage3_current_user");
+  localStorage.removeItem("c6e_active_user_v29"); sessionStorage.removeItem("c6e_active_user_v29");
   updateTopRightPlayerUI(); window.showMirrorToast("Вы вышли из аккаунта."); window.goRoute("/feed");
 };
 
@@ -4740,20 +4757,41 @@ window.addClanRosterMemberModal = () => {
 
 window.createNewClanProfile = async (e) => {
   e.preventDefault();
-  if (!currentUser) return window.goRoute("/authorization");
+  if (!currentUser || !auth.currentUser) return window.goRoute("/authorization");
+  if (getPlayerClan(currentUser)) return window.showMirrorToast("Вы уже состоите в клане!", true);
   const name = (document.getElementById("new-clan-name")?.value || "").trim();
   const tag = (document.getElementById("new-clan-tag")?.value || "").replace(/[\[\]]/g, "").trim().toUpperCase();
-  if (!name || !tag || containsProfanity(name) || containsProfanity(tag)) return window.showMirrorToast("Проверьте название и тег клана!", true);
+  if (!name || name.length < 2 || !tag || tag.length < 2 || tag.length > 8 || containsProfanity(name) || containsProfanity(tag)) {
+    return window.showMirrorToast("Проверьте название (от 2 симв.) и тег клана (2–8 симв.)!", true);
+  }
+  if (cloudClans.some(c => String(c.tag || "").trim().toLowerCase() === tag.toLowerCase())) {
+    return window.showMirrorToast(`Клан с тегом [${tag}] уже существует! Выберите другой тег.`, true);
+  }
+  if (cloudClans.some(c => String(c.name || "").trim().toLowerCase() === name.toLowerCase())) {
+    return window.showMirrorToast(`Клан с названием «${name}» уже существует!`, true);
+  }
   const newClan = {
     id: "CLAN_" + Date.now().toString(36).toUpperCase(), name, tag,
     logo: window._pendingClanLogoDataUrl || `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(tag)}`,
-    banner: "", leaderUid: currentUser.uid, leaderNick: currentUser.nick,
+    banner: "", leaderUid: auth.currentUser.uid, leaderNick: currentUser.nick,
     cp: 0, kd: "0.00", matches: 0, wins: 0, losses: 0, kills: 0, deaths: 0, impact: 0,
-    members: [{ uid: currentUser.uid, nick: currentUser.nick, so2Id: currentUser.so2Id || "—", role: "Капитан (IGL)" }], matchHistory: []
+    applicationsOpen: false, recruitmentCriteria: "",
+    members: [{ uid: auth.currentUser.uid, nick: currentUser.nick, so2Id: currentUser.so2Id || "—", role: "Капитан (IGL)" }],
+    matchHistory: []
   };
-  cloudClans.push(newClan); currentUser.clanId = newClan.id; viewedClanId = null;
-  saveCurrentUserEverywhere();
-  window.showMirrorToast(`Клан [${tag}] ${name} создан!`);
+  try {
+    await setDoc(doc(db, "clans", newClan.id), newClan);
+    await setDoc(doc(db, "users", auth.currentUser.uid), { clanId: newClan.id }, { merge: true });
+    cloudClans.push(newClan);
+    currentUser.clanId = newClan.id;
+    viewedClanId = null;
+    try { localStorage.setItem("c6e_active_user_v29", JSON.stringify(currentUser)); } catch (err) {}
+    updateTopRightPlayerUI();
+    renderAllStageSections();
+    window.showMirrorToast(`Клан [${tag}] ${name} создан и сохранён!`);
+  } catch (err) {
+    window.showMirrorToast("Ошибка сохранения клана в базу. Проверьте подключение.", true);
+  }
 };
 
 window.setLeaderboardTab = (tab) => { leaderboardTab = tab === "clans" ? "clans" : "players"; renderLeaderboardSection(); };
@@ -5558,8 +5596,8 @@ window.handleForgotPasswordClick = async () => {
 function completeUserSessionLogin(userObj, remember = true, isNewRegistration = false) {
   currentUser = _cleanForFirestore(userObj); viewedProfileUid = null;
   try {
-    if (remember) localStorage.setItem("c6e_stage3_current_user", JSON.stringify(currentUser));
-    else sessionStorage.setItem("c6e_stage3_current_user", JSON.stringify(currentUser));
+    if (remember) localStorage.setItem("c6e_active_user_v29", JSON.stringify(currentUser));
+    else sessionStorage.setItem("c6e_active_user_v29", JSON.stringify(currentUser));
   } catch (e) {}
   updateTopRightPlayerUI();
   if (isNewRegistration || !currentUser.profileCompleted) {
