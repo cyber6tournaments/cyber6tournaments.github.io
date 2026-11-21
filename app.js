@@ -379,6 +379,10 @@ window.toggleMatchPause = (tId, matchId, side) => {
   if (!trn || !match) return;
 
   if (side === "RESUME") {
+    if (match.pausedAt) {
+      match.pausedAccumMs = (match.pausedAccumMs || 0) + (Date.now() - match.pausedAt);
+      match.pausedAt = null;
+    }
     match.isPaused = false;
     match.pauseInfo = "";
     appendTournamentAuditLog(trn, `Пауза снята (${match.teamA?.name || 'A'} vs ${match.teamB?.name || 'B'})`);
@@ -395,6 +399,7 @@ window.toggleMatchPause = (tId, matchId, side) => {
   if (side === "A") match.pausesA += 1;
   else match.pausesB += 1;
   match.isPaused = true;
+  if (!match.pausedAt) match.pausedAt = Date.now();
   match.pauseInfo = `Пауза стороны ${side} (${side === 'A' ? match.pausesA : match.pausesB}/2) • запросил ${currentUser.nick}`;
   appendTournamentAuditLog(trn, match.pauseInfo);
   syncArenaDataToCloud();
@@ -424,6 +429,315 @@ function findMyActiveMatchInTournament(trn) {
 }
 
 // Зафиксировать результат одной карты в серии BO3 / BO5
+
+// ============================================================================
+// V26: ТОЧНАЯ СИСТЕМА СЕРИЙ (BO1 / BO2 / BO3 / BO5) И ЖИВОЙ ТАЙМЕР МАТЧА
+// ============================================================================
+function getEffectiveMatchSeriesFormat(trn, match) {
+  const base = (trn && trn.seriesFormat) || "BO1";
+  const sf = trn && trn.stageFormats;
+  if (!sf || !match) return base;
+  const rn = String(match.roundName || "").toLowerCase();
+  if (rn.includes("финал") && !rn.includes("полу") && !rn.includes("четверть") && !rn.includes("1/2") && !rn.includes("1/4")) {
+    return sf.final || base;
+  }
+  if (rn.includes("полуфинал") || rn.includes("1/2") || rn.includes("1/4") || rn.includes("четверть")) {
+    return sf.playoff || base;
+  }
+  if (rn.includes("1/16") || rn.includes("1/8") || rn.includes("квал")) {
+    return sf.early || base;
+  }
+  return base;
+}
+
+function getSeriesRulesMeta(fmt) {
+  const f = String(fmt || "BO1").toUpperCase();
+  if (f === "BO2") return { code: "BO2", maxMaps: 2, winsNeeded: 2, allowDraw: true, label: "BO2 • 2 КАРТЫ (2:0 ИЛИ 1:1)" };
+  if (f === "BO3") return { code: "BO3", maxMaps: 3, winsNeeded: 2, allowDraw: false, label: "BO3 • ДО 2 ПОБЕД" };
+  if (f === "BO5") return { code: "BO5", maxMaps: 5, winsNeeded: 3, allowDraw: false, label: "BO5 • ДО 3 ПОБЕД" };
+  return { code: "BO1", maxMaps: 1, winsNeeded: 1, allowDraw: false, label: "BO1 • 1 КАРТА" };
+}
+
+function formatElapsedClock(ms) {
+  const totalSec = Math.max(0, Math.floor((ms || 0) / 1000));
+  const hrs = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return hrs > 0 ? `${pad(hrs)}:${pad(mins)}:${pad(secs)}` : `${pad(mins)}:${pad(secs)}`;
+}
+
+function getMatchElapsedMs(match) {
+  if (!match) return 0;
+  if (match.status === "finished" && typeof match.durationSec === "number") {
+    return match.durationSec * 1000;
+  }
+  if (!match.startedAt) return 0;
+  const endRef = match.status === "finished"
+    ? (match.finishedAt || Date.now())
+    : (match.isPaused && match.pausedAt ? match.pausedAt : Date.now());
+  return Math.max(0, endRef - match.startedAt - (match.pausedAccumMs || 0));
+}
+
+function lockMatchFinalDuration(match) {
+  if (!match) return;
+  const now = Date.now();
+  if (!match.startedAt) match.startedAt = now;
+  match.finishedAt = now;
+  match.finishedTimeLabel = new Date(now).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const elapsedMs = Math.max(0, now - match.startedAt - (match.pausedAccumMs || 0));
+  match.durationSec = Math.floor(elapsedMs / 1000);
+  match.durationFormatted = formatElapsedClock(elapsedMs);
+}
+
+window.startMatchLiveTimer = (tId, matchId) => {
+  const trn = cloudTournaments.find(t => t.id === tId);
+  const match = trn ? findMatchInTournament(trn, matchId) : null;
+  if (!trn || !match || !currentUser) return;
+  if (!canModerateBracket(getUserRoleInTournament(currentUser, trn))) {
+    return window.showMirrorToast("Запустить таймер и LIVE-матч может судья или организатор!", true);
+  }
+  const now = Date.now();
+  if (!match.startedAt) {
+    match.startedAt = now;
+    match.startedTimeLabel = new Date(now).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    match.pausedAccumMs = 0;
+  }
+  if (match.isPaused && match.pausedAt) {
+    match.pausedAccumMs = (match.pausedAccumMs || 0) + (now - match.pausedAt);
+    match.pausedAt = null;
+    match.isPaused = false;
+  }
+  match.status = "live";
+  appendTournamentAuditLog(trn, `▶ Матч переведён в LIVE (${match.startedTimeLabel}), запущен таймер игры.`);
+  syncLiveMatchesRegistry();
+  syncArenaDataToCloud();
+  renderAllStageSections();
+  window.showMirrorToast("Таймер игры запущен! Матч выведен в LIVE.");
+};
+
+let _pendingSeriesTabTarget = null;
+
+window.uploadSeriesMapTab = (tId, matchId, mapIdx) => {
+  if (!currentUser) return window.goRoute("/authorization");
+  _pendingSeriesTabTarget = { tId, matchId, mapIdx };
+  let inp = document.getElementById("c6e-series-map-tab-input");
+  if (!inp) {
+    inp = document.createElement("input");
+    inp.type = "file";
+    inp.id = "c6e-series-map-tab-input";
+    inp.accept = "image/*";
+    inp.style.display = "none";
+    document.body.appendChild(inp);
+    inp.onchange = (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file || !_pendingSeriesTabTarget) return;
+      const { tId: curT, matchId: curM, mapIdx: curIdx } = _pendingSeriesTabTarget;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        const trn = cloudTournaments.find(t => t.id === curT);
+        const match = trn ? findMatchInTournament(trn, curM) : null;
+        if (!trn || !match) return;
+        match.seriesMaps = Array.isArray(match.seriesMaps) ? match.seriesMaps : [];
+        const existing = match.seriesMaps[curIdx] || {};
+        match.seriesMaps[curIdx] = {
+          ...existing,
+          mapIndex: curIdx,
+          map: existing.map || match.map || OFFICIAL_SO2_MAPS[curIdx % OFFICIAL_SO2_MAPS.length],
+          tabScreenshot: dataUrl,
+          uploadedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        };
+        match.tabScreenshot = dataUrl;
+        syncArenaDataToCloud();
+        renderAllStageSections();
+        window.showMirrorToast(`Таб Карты ${curIdx + 1} загружен! Введите счёт или запустите OCR-сканер.`);
+      };
+      reader.readAsDataURL(file);
+      inp.value = "";
+    };
+  }
+  inp.click();
+};
+
+window.confirmSeriesMapScore = (tId, matchId, mapIdx) => {
+  const trn = cloudTournaments.find(t => t.id === tId);
+  const match = trn ? findMatchInTournament(trn, matchId) : null;
+  if (!trn || !match || !currentUser) return;
+  if (!canModerateBracket(getUserRoleInTournament(currentUser, trn))) {
+    return window.showMirrorToast("Подтвердить итоговый счёт карты может судья или организатор!", true);
+  }
+  const rules = getSeriesRulesMeta(getEffectiveMatchSeriesFormat(trn, match));
+  const curSlot = (match.seriesMaps && match.seriesMaps[mapIdx]) || {};
+  const mapName = prompt(`Название карты №${mapIdx + 1}:`, curSlot.map || match.map || "Sandstone");
+  if (!mapName) return;
+  const sAStr = prompt(`Счёт раундов команды A (${getMatchSideName(match.teamA)}) на карте ${mapName}:`, String(curSlot.scoreA ?? 13));
+  if (sAStr === null) return;
+  const sBStr = prompt(`Счёт раундов команды B (${getMatchSideName(match.teamB)}) на карте ${mapName}:`, String(curSlot.scoreB ?? 0));
+  if (sBStr === null) return;
+
+  const sA = Math.max(0, parseInt(sAStr, 10) || 0);
+  const sB = Math.max(0, parseInt(sBStr, 10) || 0);
+  if (sA === sB) return window.showMirrorToast("В Standoff 2 карта не может закончиться вничью!", true);
+
+  const now = Date.now();
+  if (!match.startedAt) {
+    match.startedAt = now;
+    match.startedTimeLabel = new Date(now).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  match.seriesMaps = Array.isArray(match.seriesMaps) ? match.seriesMaps : [];
+  match.seriesMaps[mapIdx] = {
+    ...curSlot,
+    mapIndex: mapIdx,
+    map: mapName.trim(),
+    scoreA: sA,
+    scoreB: sB,
+    winner: sA > sB ? "A" : "B",
+    finishedTime: new Date(now).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    elapsedAtFinish: formatElapsedClock(getMatchElapsedMs(match))
+  };
+
+  const completed = match.seriesMaps.filter(x => x && x.winner);
+  const wonA = completed.filter(x => x.winner === "A").length;
+  const wonB = completed.filter(x => x.winner === "B").length;
+  match.scoreA = rules.code === "BO1" ? sA : wonA;
+  match.scoreB = rules.code === "BO1" ? sB : wonB;
+  match.map = mapName.trim();
+
+  appendTournamentAuditLog(trn, `${rules.code} Карта ${mapIdx + 1} (${mapName}): ${sA}:${sB} → счёт серии ${wonA}:${wonB}`);
+
+  // Автоматическое закрытие серии при достижении нужного числа побед
+  let seriesClosed = false;
+  if (wonA >= rules.winsNeeded || wonB >= rules.winsNeeded) {
+    match.winner = wonA >= rules.winsNeeded ? "A" : "B";
+    match.status = "finished";
+    lockMatchFinalDuration(match);
+    seriesClosed = true;
+    if (typeof advanceWinnerToNextRound === "function") {
+      advanceWinnerToNextRound(trn, match, match.winner === "A" ? match.teamA : match.teamB);
+    }
+  } else if (rules.allowDraw && completed.length >= rules.maxMaps) {
+    match.winner = "DRAW";
+    match.status = "finished";
+    lockMatchFinalDuration(match);
+    seriesClosed = true;
+  }
+
+  syncLiveMatchesRegistry();
+  syncArenaDataToCloud();
+  renderAllStageSections();
+  if (seriesClosed) {
+    window.showMirrorToast(`Серия ${rules.code} завершена (${wonA}:${wonB})! Время игры: ${match.durationFormatted}.`);
+  } else {
+    window.showMirrorToast(`Карта ${mapIdx + 1} зафиксирована (${sA}:${sB}). Счёт серии: ${wonA}:${wonB} — открыта Карта ${mapIdx + 2}!`);
+  }
+};
+
+function renderMatchTimerBarHTML(trn, match, isMod) {
+  const elapsed = formatElapsedClock(getMatchElapsedMs(match));
+  const isLive = match.status === "live" && !match.isPaused;
+  const isPaused = Boolean(match.isPaused);
+  const isDone = match.status === "finished";
+  const clockCls = isLive ? "is-live" : (isPaused ? "is-paused" : "");
+  const statusLbl = isDone
+    ? `✓ ЗАВЕРШЁН • ДЛИТЕЛЬНОСТЬ: ${escapeHTML(match.durationFormatted || elapsed)}`
+    : (isPaused
+      ? `⏸ ПАУЗА • ВРЕМЯ ИГРЫ: ${elapsed}`
+      : (isLive
+        ? `● ИДЁТ ИГРА: ${elapsed}`
+        : `⏱ ОЖИДАНИЕ СТАРТА (00:00)`));
+
+  return `
+    <div class="match-timer-bar">
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <span class="match-timer-clock ${clockCls}" data-live-timer-match="${escapeHTML(match.id)}" data-trn-id="${escapeHTML(trn.id)}">
+          ${statusLbl}
+        </span>
+        ${match.startedTimeLabel ? `<span class="glass-pill-badge">Старт: ${escapeHTML(match.startedTimeLabel)}</span>` : ''}
+        ${match.finishedTimeLabel ? `<span class="glass-pill-badge">Финиш: ${escapeHTML(match.finishedTimeLabel)}</span>` : ''}
+      </div>
+      ${isMod && !isDone ? `
+        <button type="button" class="auth-submit-btn" style="width:auto; padding:6px 12px; font-size:9.5px;" onclick="window.startMatchLiveTimer('${trn.id}', '${match.id}')">
+          ${isLive ? '● Таймер идёт' : '▶ Старт таймера / LIVE'}
+        </button>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderSeriesMapStepperHTML(trn, match, isMod) {
+  const fmt = getEffectiveMatchSeriesFormat(trn, match);
+  const rules = getSeriesRulesMeta(fmt);
+  const maps = Array.isArray(match.seriesMaps) ? match.seriesMaps : [];
+  const wonA = maps.filter(x => x && x.winner === "A").length;
+  const wonB = maps.filter(x => x && x.winner === "B").length;
+  const seriesDecided = match.status === "finished" || wonA >= rules.winsNeeded || wonB >= rules.winsNeeded || (rules.allowDraw && maps.filter(x => x && x.winner).length >= rules.maxMaps);
+
+  let currentActiveIdx = -1;
+  if (!seriesDecided) {
+    for (let i = 0; i < rules.maxMaps; i++) {
+      if (!maps[i] || !maps[i].winner) { currentActiveIdx = i; break; }
+    }
+  }
+
+  const slotsHTML = Array.from({ length: rules.maxMaps }, (_, idx) => {
+    const slot = maps[idx] || null;
+    const isDone = Boolean(slot && slot.winner);
+    const isCurrent = !seriesDecided && idx === currentActiveIdx;
+    const isSkipped = seriesDecided && !isDone;
+    const cls = isDone ? "is-done" : (isCurrent ? "is-current" : (isSkipped ? "is-skipped" : ""));
+    const mapTitle = idx === rules.maxMaps - 1 && rules.maxMaps >= 3 ? `Карта ${idx + 1} (Десайдер)` : `Карта ${idx + 1}`;
+
+    return `
+      <div class="series-slot-card ${cls}">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+          <b style="font-family:var(--font-display); font-size:10.5px; color:#ffffff;">${mapTitle}</b>
+          ${isDone ? `<span style="font-size:10px; color:#86efac; font-weight:800;">✓ ${slot.scoreA}:${slot.scoreB}</span>`
+            : (isCurrent ? `<span style="font-size:9.5px; color:var(--accent-soft); font-weight:800;">● ТЕКУЩАЯ</span>`
+              : (isSkipped ? `<span style="font-size:9.5px; color:var(--white-dim);">Не нужна</span>`
+                : `<span style="font-size:9.5px; color:var(--white-dim);">Ожидание</span>`))}
+        </div>
+        ${slot && slot.map ? `<div style="font-size:11px; color:var(--white-soft);">${escapeHTML(slot.map)} ${slot.finishedTime ? `• ${escapeHTML(slot.finishedTime)}` : ''}</div>` : ''}
+        ${slot && slot.tabScreenshot ? `<img src="${slot.tabScreenshot}" class="series-slot-thumb" onclick="window.openTabLightbox('${slot.tabScreenshot}')" alt="Таб карты ${idx + 1}">` : ''}
+        ${!isSkipped ? `
+          <div style="display:flex; gap:5px; flex-wrap:wrap; margin-top:auto;">
+            <button type="button" class="social-auth-btn" style="flex:1; padding:5px 7px; font-size:9px;" onclick="window.uploadSeriesMapTab('${trn.id}', '${match.id}', ${idx})">
+              📷 ${slot && slot.tabScreenshot ? 'Заменить таб' : 'Таб Карты ' + (idx + 1)}
+            </button>
+            ${isMod ? `<button type="button" class="auth-submit-btn" style="flex:1; padding:5px 7px; font-size:9px;" onclick="window.confirmSeriesMapScore('${trn.id}', '${match.id}', ${idx})">${isDone ? 'Изм.' : '✓ Итог'}</button>` : ''}
+          </div>
+        ` : `<div style="font-size:10px; color:var(--white-dim);">Серия закрыта досрочно (${wonA}:${wonB})</div>`}
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="series-stepper-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div style="font-family:var(--font-display); font-size:11px; font-weight:900; color:#ffffff;">
+          ПРОГРЕСС СЕРИИ • <span style="color:var(--accent-soft);">${rules.label}</span>
+        </div>
+        <span class="glass-pill-badge">СЧЁТ ПО КАРТАМ: ${wonA} : ${wonB}</span>
+      </div>
+      <div class="series-stepper-grid">${slotsHTML}</div>
+    </div>
+  `;
+}
+
+// Live 1-second timer ticker (never re-renders inputs/chat!)
+if (!window._c6eLiveTimerInterval) {
+  window._c6eLiveTimerInterval = setInterval(() => {
+    document.querySelectorAll("[data-live-timer-match]").forEach(el => {
+      const mId = el.getAttribute("data-live-timer-match");
+      const tId = el.getAttribute("data-trn-id");
+      const trn = cloudTournaments.find(t => t.id === tId);
+      const match = trn ? findMatchInTournament(trn, mId) : cloudMatches.find(m => m.id === mId);
+      if (!match || match.status !== "live" || match.isPaused) return;
+      el.textContent = `● ИДЁТ ИГРА: ${formatElapsedClock(getMatchElapsedMs(match))}`;
+    });
+  }, 1000);
+}
+
 window.recordMapScoreInSeries = (tId, matchId) => {
   const trn = cloudTournaments.find(t => t.id === tId);
   const match = trn ? findMatchInTournament(trn, matchId) : null;
@@ -2534,6 +2848,12 @@ window.submitCreateTournamentUnified = (e, isOfficialMode = false) => {
     prizeGold,
     maxTeams,
     seriesFormat,
+    hasQualification: Boolean(document.getElementById(`${prefix}trn-has-qual`)?.checked),
+    stageFormats: {
+      early: (document.getElementById(`${prefix}trn-fmt-early`)?.value || seriesFormat || "BO1").trim(),
+      playoff: (document.getElementById(`${prefix}trn-fmt-playoff`)?.value || "BO3").trim(),
+      final: (document.getElementById(`${prefix}trn-fmt-final`)?.value || "BO3").trim()
+    },
     payoutPaid: false,
     startDate,
     isOfficial: Boolean(isOfficialMode),
@@ -3036,13 +3356,49 @@ function buildTournamentCreatorFormHTML(isOfficialMode = false) {
             <button type="button" class="glass-select-trigger" onclick="window.toggleGlassDropdown('${prefix}trn-series-dd', event)">
               <span id="${prefix}trn-series-lbl">BO1</span><i class="fas fa-chevron-down" style="font-size:11px; color:var(--accent-soft);"></i>
             </button>
-            <div class="glass-select-menu">${["BO1", "BO3", "BO5"].map(sr => `<button type="button" class="glass-select-option" onclick="window.selectGlassDropdownOption('${prefix}trn-series-dd','${prefix}trn-series','${prefix}trn-series-lbl','${sr}')">${sr}</button>`).join("")}</div>
+            <div class="glass-select-menu">${["BO1", "BO2", "BO3", "BO5"].map(sr => `<button type="button" class="glass-select-option" onclick="window.selectGlassDropdownOption('${prefix}trn-series-dd','${prefix}trn-series','${prefix}trn-series-lbl','${sr}')">${sr}</button>`).join("")}</div>
           </div>
         </div>
         <div class="auth-form-group" style="margin:0;">
           <label class="auth-label">Дата старта</label>
           <input type="text" id="${prefix}trn-date" class="auth-input" style="padding-left:14px;" placeholder="01.12 • 19:00" required>
         </div>
+      </div>
+
+      
+      <div class="glass-subcard" style="padding:12px; margin-bottom:14px;">
+        <div style="font-family:var(--font-display); font-size:10.5px; font-weight:900; color:var(--accent-soft); margin-bottom:8px;">
+          ТОЧНАЯ НАСТРОЙКА ЭТАПОВ И СЕРИЙ (1/16 → 1/8 → 1/4 → 1/2 → ФИНАЛ)
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(145px, 1fr)); gap:9px; margin-bottom:10px;">
+          <div class="auth-form-group" style="margin:0;">
+            <label class="auth-label">1/16 и 1/8</label>
+            <select id="${prefix}trn-fmt-early" class="auth-input" style="padding-left:10px;">
+              <option value="BO1" selected>BO1 (1 карта)</option>
+              <option value="BO2">BO2 (2 карты)</option>
+              <option value="BO3">BO3 (до 2 побед)</option>
+            </select>
+          </div>
+          <div class="auth-form-group" style="margin:0;">
+            <label class="auth-label">1/4 и 1/2</label>
+            <select id="${prefix}trn-fmt-playoff" class="auth-input" style="padding-left:10px;">
+              <option value="BO1">BO1 (1 карта)</option>
+              <option value="BO3" selected>BO3 (до 2 побед)</option>
+              <option value="BO5">BO5 (до 3 побед)</option>
+            </select>
+          </div>
+          <div class="auth-form-group" style="margin:0;">
+            <label class="auth-label">Финал</label>
+            <select id="${prefix}trn-fmt-final" class="auth-input" style="padding-left:10px;">
+              <option value="BO1">BO1 (1 карта)</option>
+              <option value="BO3" selected>BO3 (до 2 побед)</option>
+              <option value="BO5">BO5 (до 3 побед)</option>
+            </select>
+          </div>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--white-soft); cursor:pointer;">
+          <input type="checkbox" id="${prefix}trn-has-qual"> Добавить этап Квалификации перед плей-офф (BO1 / BO2)
+        </label>
       </div>
 
       <div class="auth-label" style="margin-bottom:6px;">Способ участия:</div>
@@ -3471,7 +3827,7 @@ function renderTournamentsSection() {
             <div class="glass-subcard" style="margin-bottom:14px; border-color:var(--accent-bright);">
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                  <span class="glass-pill-badge">${escapeHTML(activeMatch.roundName || 'МАТЧ')} • ${escapeHTML(trn.seriesFormat || 'BO1')}</span>
+                  <span class="glass-pill-badge">${escapeHTML(activeMatch.roundName || 'МАТЧ')} • ${escapeHTML(getEffectiveMatchSeriesFormat(trn, activeMatch))}</span>
                   <span class="glass-pill-badge">КАРТА: ${escapeHTML(activeMatch.map || 'Sandstone')}</span>
                   ${activeMatch.lobbyId ? `<button type="button" class="glass-pill-badge" style="cursor:pointer; border-color:var(--accent-soft);" onclick="window.copyLobbyId('${escapeHTML(activeMatch.lobbyId)}', event)"><i class="far fa-copy"></i> ЛОББИ: ${escapeHTML(activeMatch.lobbyId)}</button>` : ''}
                 </div>
@@ -3526,11 +3882,8 @@ function renderTournamentsSection() {
                 </div>
               </div>
 
-              ${(activeMatch.seriesMaps || []).length > 0 ? `
-                <div class="series-maps-strip">
-                  ${activeMatch.seriesMaps.map((sm, idx) => `<span class="series-map-pill">Карта ${idx + 1}: ${escapeHTML(sm.map)} (${sm.scoreA}:${sm.scoreB})</span>`).join("")}
-                </div>
-              ` : ''}
+              ${renderMatchTimerBarHTML(trn, activeMatch, isMod)}
+              ${renderSeriesMapStepperHTML(trn, activeMatch, isMod)}
 
               <!-- КОМПАКТНЫЕ ВКЛАДКИ КОМНАТЫ МАТЧА -->
               <div class="mr-compact-tabs">
