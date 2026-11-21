@@ -80,6 +80,83 @@ function getSO2EmblemSVG(size = 16) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><path d="M12 2L4 5.5v6.5c0 4.8 3.4 9.1 8 10.5 4.6-1.4 8-5.7 8-10.5V5.5L12 2z" fill="rgba(201,82,18,0.26)" stroke="#ffffff" stroke-width="1.6"/><path d="M9 9.5h6l-4.5 5H15" stroke="#d97736" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 
+
+function getDevBadgeHTML() {
+  return `<span class="c6e-dev-pill" title="Официальный разработчик платформы"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><polygon points="12,1.5 21,6.5 21,17.5 12,22.5 3,17.5 3,6.5" fill="#d97706" stroke="#fde047" stroke-width="1.8"/><path d="M8.5 12.2l2.3 2.3 4.8-5.1" stroke="#ffffff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>DEV</span>`;
+}
+
+function getOfficialCheckSVG(size = 14, title = "Подтверждённый статус") {
+  return `<span class="c6e-badge-inline" title="${title}"><svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><polygon points="12,1.5 20.5,6.5 20.5,17.5 12,22.5 3.5,17.5 3.5,6.5" fill="#0ea5e9" stroke="#bae6fd" stroke-width="1.7"/><path d="M8.2 12.2l2.5 2.5 5.1-5.4" stroke="#ffffff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+}
+
+function renderUserBadgesHTML(u) {
+  if (!u) return "";
+  let out = "";
+  const isDev = Boolean(u.hasDevBadge || String(u.email || "").toLowerCase() === FOUNDER_ADMIN_EMAIL);
+  if (isDev) out += getDevBadgeHTML();
+  if (u.verifiedBadge) out += getOfficialCheckSVG(14, "Верифицированный игрок");
+  return out;
+}
+
+function renderClanBadgeHTML(c) {
+  if (!c || !c.verifiedBadge) return "";
+  return getOfficialCheckSVG(15, "Официально верифицированная команда");
+}
+
+function normalizeSafeUserObj(raw, fbUser = null) {
+  const email = String(raw?.email || fbUser?.email || "").toLowerCase();
+  const isFounder = email === FOUNDER_ADMIN_EMAIL;
+  const fallbackNick = isFounder ? "Kas" : ((email.split("@")[0] || "Player").replace(/[^A-Za-z0-9_]/g, "").slice(0, 14) || "Player");
+  const nick = (raw && raw.nick && raw.nick !== "undefined") ? raw.nick : fallbackNick;
+  const regLoc = detectUserRegionData();
+  return {
+    uid: raw?.uid || fbUser?.uid || "",
+    username: raw?.username || nick.toLowerCase(),
+    email: raw?.email || fbUser?.email || "",
+    nick,
+    accountType: raw?.accountType || "player",
+    isAdmin: Boolean(isFounder || raw?.isAdmin),
+    hasDevBadge: Boolean(isFounder || raw?.hasDevBadge),
+    verifiedBadge: Boolean(raw?.verifiedBadge),
+    isVerifiedOrganizer: Boolean(isFounder || raw?.isVerifiedOrganizer || raw?.organizerStatus === "verified"),
+    organizerStatus: raw?.organizerStatus || (isFounder ? "verified" : null),
+    orgName: raw?.orgName || "",
+    orgSocials: raw?.orgSocials || {},
+    orgStaff: Array.isArray(raw?.orgStaff) ? raw.orgStaff : [],
+    subscribers: Array.isArray(raw?.subscribers) ? raw.subscribers : [],
+    so2Id: raw?.so2Id || (isFounder ? "C6E-000001" : ""),
+    so2IdUpdatedAt: raw?.so2IdUpdatedAt || 0,
+    so2IdChangeRequested: Boolean(raw?.so2IdChangeRequested),
+    so2ProfileLink: raw?.so2ProfileLink || "",
+    age: raw?.age || "",
+    region: raw?.region || regLoc.label,
+    regionFlag: raw?.regionFlag || regLoc.flag,
+    playRole: raw?.playRole || (isFounder ? "Капитан (IGL)" : "Рифлер / Энтри"),
+    avatar: raw?.avatar || `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(nick)}&backgroundColor=9a3412`,
+    banner: raw?.banner || "",
+    provider: raw?.provider || "Firebase Auth",
+    clanId: raw?.clanId || null,
+    cp: Number(raw?.cp || 0),
+    kills: Number(raw?.kills ?? raw?.stats?.kills ?? 0),
+    deaths: Number(raw?.deaths ?? raw?.stats?.deaths ?? 0),
+    wins: Number(raw?.wins ?? raw?.stats?.wins ?? 0),
+    losses: Number(raw?.losses ?? raw?.stats?.losses ?? 0),
+    matchesPlayed: Number(raw?.matchesPlayed ?? raw?.stats?.matchesPlayed ?? 0),
+    banned: Boolean(raw?.banned),
+    profileCompleted: Boolean(raw?.profileCompleted || isFounder),
+    stats: {
+      kd: raw?.stats?.kd || "0.00",
+      kills: Number(raw?.stats?.kills ?? raw?.kills ?? 0),
+      deaths: Number(raw?.stats?.deaths ?? raw?.deaths ?? 0),
+      impact: Number(raw?.stats?.impact ?? 0),
+      matchesPlayed: Number(raw?.stats?.matchesPlayed ?? raw?.matchesPlayed ?? 0),
+      wins: Number(raw?.stats?.wins ?? raw?.wins ?? 0),
+      losses: Number(raw?.stats?.losses ?? raw?.losses ?? 0)
+    },
+    matchHistory: Array.isArray(raw?.matchHistory) ? raw.matchHistory : []
+  };
+}
+
 function getVerifiedOrgCheckSVG(size = 13) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><polygon points="12,1.5 20.5,6.5 20.5,17.5 12,22.5 3.5,17.5 3.5,6.5" fill="#15803d" stroke="#86efac" stroke-width="1.6"/><path d="M8.5 12.2l2.4 2.4 4.8-5.2" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
@@ -1021,13 +1098,13 @@ function _recordSnapshotHashes(colName, arr, idField) {
 // Public realtime Firestore listeners
 onSnapshot(collection(db, "users"), (snap) => {
   const list = [];
-  snap.forEach(d => list.push({ uid: d.id, ...d.data() }));
+  snap.forEach(d => list.push(normalizeSafeUserObj({ uid: d.id, ...d.data() })));
   cloudUsers = list;
   _recordSnapshotHashes("users", cloudUsers, "uid");
   if (currentUser) {
     const fresh = cloudUsers.find(u => u.uid === currentUser.uid);
     if (fresh) {
-      currentUser = fresh;
+      currentUser = normalizeSafeUserObj({ ...currentUser, ...fresh, nick: fresh.nick || currentUser.nick }, auth.currentUser);
       try { localStorage.setItem("c6e_active_user_v29", JSON.stringify(currentUser)); } catch (e) {}
       updateTopRightPlayerUI();
     }
@@ -1192,9 +1269,15 @@ onAuthStateChanged(auth, async (fbUser) => {
     }
   }
   if (existing) {
+    const needsHeal = !existing.nick || existing.nick === "undefined" || !existing.stats;
+    existing = normalizeSafeUserObj(existing, fbUser);
     if (isFounderEmail) {
       existing.isAdmin = true;
+      existing.hasDevBadge = true;
       existing.isVerifiedOrganizer = true;
+    }
+    if (needsHeal) {
+      try { await setDoc(doc(db, "users", fbUser.uid), _cleanForFirestore(existing), { merge: true }); } catch (e) {}
     }
     const idx = cloudUsers.findIndex(u => u.uid === fbUser.uid);
     if (idx >= 0) cloudUsers[idx] = existing;
@@ -4273,7 +4356,19 @@ window.toggleNotificationsModal = (ev) => {
   const bd = document.getElementById("glass-notif-backdrop");
   if (!bd) return;
   renderNotificationsListModal();
+  const willOpen = !bd.classList.contains("open");
   bd.classList.toggle("open");
+  if (willOpen && currentUser && auth.currentUser) {
+    // Automatically mark non-invite informational notifications as read in Firestore when viewed
+    const toMark = cloudNotifications.filter(n => (n.targetUid === currentUser.uid || n.toUid === currentUser.uid) && !n.read && n.type !== "clan_invite");
+    if (toMark.length > 0) {
+      toMark.forEach(n => { n.read = true; });
+      updateNotificationsBadgeUI();
+      const batch = writeBatch(db);
+      toMark.forEach(n => batch.set(doc(db, "notifications", n.id), { read: true }, { merge: true }));
+      batch.commit().catch(() => {});
+    }
+  }
 };
 
 window.closeNotificationsModal = () => {
@@ -4281,12 +4376,24 @@ window.closeNotificationsModal = () => {
   if (bd) bd.classList.remove("open");
 };
 
-window.markAllNotificationsRead = () => {
-  if (!currentUser) return;
-  cloudNotifications.forEach(n => { if (n.targetUid === currentUser.uid) n.read = true; });
-  syncArenaDataToCloud();
+window.markAllNotificationsRead = async () => {
+  if (!currentUser || !auth.currentUser) return;
+  const unread = cloudNotifications.filter(n => (n.targetUid === currentUser.uid || n.toUid === currentUser.uid) && !n.read);
+  unread.forEach(n => { n.read = true; });
   updateNotificationsBadgeUI();
   renderNotificationsListModal();
+  if (unread.length === 0) return;
+  try {
+    const batch = writeBatch(db);
+    unread.forEach(n => {
+      batch.set(doc(db, "notifications", n.id), { read: true }, { merge: true });
+    });
+    await batch.commit();
+  } catch (e) {
+    for (const n of unread) {
+      setDoc(doc(db, "notifications", n.id), { read: true }, { merge: true }).catch(() => {});
+    }
+  }
 };
 
 // --- ЗАЯВКИ В КЛАНЫ И ПРИГЛАШЕНИЯ (ТОЛЬКО КАПИТАН КЛАНА) ---
@@ -4781,7 +4888,9 @@ window.createNewClanProfile = async (e) => {
   };
   try {
     await setDoc(doc(db, "clans", newClan.id), newClan);
-    await setDoc(doc(db, "users", auth.currentUser.uid), { clanId: newClan.id }, { merge: true });
+    currentUser = normalizeSafeUserObj({ ...currentUser, clanId: newClan.id }, auth.currentUser);
+    const userPayload = currentUser.isAdmin ? _cleanForFirestore(currentUser) : _stripProtectedUserFields(currentUser);
+    await setDoc(doc(db, "users", auth.currentUser.uid), userPayload, { merge: true });
     cloudClans.push(newClan);
     currentUser.clanId = newClan.id;
     viewedClanId = null;
@@ -5074,6 +5183,37 @@ window.adminDeleteUser = async (uid) => {
   window.showMirrorToast(`Профиль ${u.nick} удалён.`);
 };
 
+
+window.adminTogglePlayerVerified = (uid) => {
+  if (!currentUser || !currentUser.isAdmin) return;
+  const u = cloudUsers.find(x => x.uid === uid);
+  if (!u) return;
+  u.verifiedBadge = !u.verifiedBadge;
+  syncArenaDataToCloud();
+  renderAllStageSections();
+  window.showMirrorToast(u.verifiedBadge ? `Игроку ${u.nick} выдана галочка!` : `Галочка снята с ${u.nick}.`);
+};
+
+window.adminTogglePlayerDev = (uid) => {
+  if (!currentUser || !currentUser.isAdmin) return;
+  const u = cloudUsers.find(x => x.uid === uid);
+  if (!u) return;
+  u.hasDevBadge = !u.hasDevBadge;
+  syncArenaDataToCloud();
+  renderAllStageSections();
+  window.showMirrorToast(u.hasDevBadge ? `Игроку ${u.nick} выдана галочка Разработчика (DEV)!` : `Галочка DEV снята с ${u.nick}.`);
+};
+
+window.adminToggleClanVerified = (clanId) => {
+  if (!currentUser || !currentUser.isAdmin) return;
+  const c = cloudClans.find(x => x.id === clanId);
+  if (!c) return;
+  c.verifiedBadge = !c.verifiedBadge;
+  syncArenaDataToCloud();
+  renderAllStageSections();
+  window.showMirrorToast(c.verifiedBadge ? `Клану [${c.tag}] выдана официальная галочка!` : `Галочка снята с клана [${c.tag}].`);
+};
+
 window.adminEditClanCP = (clanId) => {
   if (!currentUser || !currentUser.isAdmin) return;
   const c = cloudClans.find(x => x.id === clanId);
@@ -5300,7 +5440,7 @@ function renderExtraSections() {
             ${filteredUsers.map(u => `
               <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; padding:9px 10px; border-radius:10px; background:rgba(255,255,255,0.03); border:1px solid var(--edge-light);">
                 <div style="cursor:pointer;" onclick="window.viewPlayerProfile('${u.uid}')">
-                  <b>${escapeHTML(u.nick)}</b>
+                  <b>${escapeHTML(u.nick)}</b>${renderUserBadgesHTML(u)}
                   <span style="font-size:11px; color:var(--accent-soft); margin-left:6px;">${u.cp || 0} CP</span>
                   ${u.isAdmin ? `<span class="official-c6e-badge" style="margin-left:6px;">ADMIN</span>` : ''}
                   ${u.isVerifiedOrganizer || u.organizerStatus === 'verified' ? `<span class="verified-org-check" style="margin-left:6px;">ORG</span>` : ''}
@@ -5309,6 +5449,8 @@ function renderExtraSections() {
                 </div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
                   <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:5px 9px; font-size:9.5px;" onclick="window.adminEditPlayerStats('${u.uid}')">CP / Статы</button>
+                  <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:5px 9px; font-size:9.5px; color:#38bdf8;" onclick="window.adminTogglePlayerVerified('${u.uid}')">${u.verifiedBadge ? 'Снять ✓' : '+ Галочка'}</button>
+                  <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:5px 9px; font-size:9.5px; color:#fde047;" onclick="window.adminTogglePlayerDev('${u.uid}')">${u.hasDevBadge ? 'Снять DEV' : '+ DEV'}</button>
                   <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:5px 9px; font-size:9.5px;" onclick="window.adminVerifyOrganizer('${u.uid}', ${!(u.isVerifiedOrganizer || u.organizerStatus === 'verified')})">${(u.isVerifiedOrganizer || u.organizerStatus === 'verified') ? 'Снять Орг' : 'Выдать Орг'}</button>
                   <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:5px 9px; font-size:9.5px;" onclick="window.adminToggleUserAdmin('${u.uid}')">${u.isAdmin ? 'Снять Адм' : 'Дать Адм'}</button>
                   <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:5px 9px; font-size:9.5px; color:#fb7185;" onclick="window.adminToggleBanUser('${u.uid}')">${u.banned ? 'Разбан' : 'Бан'}</button>
@@ -5324,8 +5466,9 @@ function renderExtraSections() {
             <div style="display:flex; flex-direction:column; gap:8px;">
               ${cloudClans.map(c => `
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; padding:8px 10px; border-radius:10px; background:rgba(255,255,255,0.03); border:1px solid var(--edge-light);">
-                  <div><b>[${escapeHTML(c.tag)}] ${escapeHTML(c.name)}</b> • <span style="color:var(--accent-soft);">${c.cp || 0} CP</span> • Участников: ${(c.members || []).length}</div>
+                  <div><b>[${escapeHTML(c.tag)}] ${escapeHTML(c.name)}</b>${renderClanBadgeHTML(c)} • <span style="color:var(--accent-soft);">${c.cp || 0} CP</span> • Участников: ${(c.members || []).length}</div>
                   <div style="display:flex; gap:6px;">
+                    <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:5px 10px; font-size:9.5px; color:#38bdf8;" onclick="window.adminToggleClanVerified('${c.id}')">${c.verifiedBadge ? 'Снять ✓' : '+ Галочка'}</button>
                     <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:5px 10px; font-size:9.5px;" onclick="window.adminEditClanCP('${c.id}')">Изменить CP</button>
                     <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:5px 10px; font-size:9.5px; color:#fb7185;" onclick="window.adminDeleteClan('${c.id}')">Удалить</button>
                   </div>
@@ -5391,7 +5534,7 @@ function renderExtraSections() {
           </div>
           <div class="glass-subcard">
             <div style="font-family:var(--font-display); font-size:11.5px; font-weight:900; color:var(--accent-soft); margin-bottom:10px;">ЗАПРОСЫ SO2 ID (${idReqs.length}) И ТИКЕТЫ (${cloudTickets.length})</div>
-            ${idReqs.map(u => `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:11.5px;"><span>ID: <b>${escapeHTML(u.nick)}</b> (${escapeHTML(u.so2Id)})</span><button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:4px 9px; font-size:9.5px;" onclick="window.adminApproveIdChange('${u.uid}')">Разрешить</button></div>`).join("")}
+            ${idReqs.map(u => `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:11.5px;"><span>ID: <b>${escapeHTML(u.nick)}</b>${renderUserBadgesHTML(u)} (${escapeHTML(u.so2Id)})</span><button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:4px 9px; font-size:9.5px;" onclick="window.adminApproveIdChange('${u.uid}')">Разрешить</button></div>`).join("")}
             ${cloudTickets.map(t => `<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--edge-light); font-size:11.5px;"><span><b>${escapeHTML(t.authorNick)}</b> (${escapeHTML(t.category)}): ${escapeHTML(t.message)}</span><button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:3px 7px; font-size:9px; color:#86efac;" onclick="window.adminCloseTicket('${t.id}')">✓</button></div>`).join("")}
             ${idReqs.length === 0 && cloudTickets.length === 0 ? `<div style="font-size:12px; color:var(--white-dim);">Запросов и тикетов нет.</div>` : ''}
           </div>
@@ -5824,51 +5967,6 @@ const startRoute = detectInitialRoute();
 if (!currentUser && startRoute !== "/feed" && startRoute !== "/authorization") activateRouteView("/authorization", false);
 else activateRouteView(startRoute, false);
 
-// === V25: EMBEDDED TRANSPARENT LOGO & TRUE 3D EXTRUDED ROTATION ===
-const C6E_TRANSPARENT_LOGO_URI = "data:image/webp;base64,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";
-
-function upgradeLogosTo3DTransparent() {
-  // Replace watermark / background logo src too if present
-  document.querySelectorAll("img").forEach(img => {
-    const src = img.getAttribute("src") || "";
-    if (!src.includes("Logotip.png") || img.dataset.c6e3dDone === "1") return;
-    if (img.closest(".c6e-3d-coin")) {
-      img.src = C6E_TRANSPARENT_LOGO_URI;
-      img.dataset.c6e3dDone = "1";
-      return;
-    }
-    // Watermark stays static subtle transparent logo
-    if (img.classList.contains("bg-logo-watermark") || img.closest(".bg-logo-watermark")) {
-      img.src = C6E_TRANSPARENT_LOGO_URI;
-      img.dataset.c6e3dDone = "1";
-      return;
-    }
-    const isAuth = img.classList.contains("auth-logo-img") || Boolean(img.closest(".auth-logo-wrap"));
-    const isTop = img.classList.contains("topbar-logo-img") || Boolean(img.closest(".topbar-logo-wrap"));
-    const sz = isAuth ? 96 : (isTop ? 48 : 42);
-    const stage = document.createElement("div");
-    stage.className = "c6e-3d-stage";
-    stage.style.width = sz + "px";
-    stage.style.height = sz + "px";
-    stage.innerHTML = `
-      <div class="c6e-3d-coin">
-        <img class="c6e-3d-layer c6e-3d-back" src="${C6E_TRANSPARENT_LOGO_URI}" alt="" data-c6e3d-done="1">
-        <img class="c6e-3d-layer c6e-3d-mid4" src="${C6E_TRANSPARENT_LOGO_URI}" alt="" data-c6e3d-done="1">
-        <img class="c6e-3d-layer c6e-3d-mid3" src="${C6E_TRANSPARENT_LOGO_URI}" alt="" data-c6e3d-done="1">
-        <img class="c6e-3d-layer c6e-3d-mid2" src="${C6E_TRANSPARENT_LOGO_URI}" alt="" data-c6e3d-done="1">
-        <img class="c6e-3d-layer c6e-3d-mid1" src="${C6E_TRANSPARENT_LOGO_URI}" alt="" data-c6e3d-done="1">
-        <img class="c6e-3d-layer c6e-3d-front" src="${C6E_TRANSPARENT_LOGO_URI}" alt="Cyber 6 Tournament" data-c6e3d-done="1">
-      </div>
-    `;
-    img.replaceWith(stage);
-  });
-}
-
-if (typeof MutationObserver !== "undefined") {
-  const _logoObs = new MutationObserver(() => upgradeLogosTo3DTransparent());
-  _logoObs.observe(document.body, { childList: true, subtree: true });
-}
-setTimeout(upgradeLogosTo3DTransparent, 30);
 
 // ============================================================================
 // V28: ЭЛЕГАНТНЫЕ СТЕКЛЯННЫЕ МОДАЛЬНЫЕ ОКНА САЙТА (ВМЕСТО СИСТЕМНЫХ PROMPT)
@@ -5955,7 +6053,7 @@ window.filterTrnInviteSuggest = (tId, q) => {
   }
   box.innerHTML = list.map(u => `
     <div class="c6e-modal-suggest-row">
-      <span><b>${escapeHTML(u.nick)}</b> <span style="color:var(--white-dim); font-size:10.5px;">ID: ${escapeHTML(u.so2Id || '—')}</span></span>
+      <span><b>${escapeHTML(u.nick)}</b>${renderUserBadgesHTML(u)} <span style="color:var(--white-dim); font-size:10.5px;">ID: ${escapeHTML(u.so2Id || '—')}</span></span>
       <button type="button" class="auth-submit-btn" style="width:auto; padding:5px 10px; font-size:9.5px;" onclick="window.sendTournamentInviteNotification('${tId}', '${u.uid}')">Пригласить</button>
     </div>
   `).join("");
@@ -6008,7 +6106,7 @@ window.filterManualAddSuggest = (tId, q) => {
     const list = cloudUsers.filter(u => u.accountType !== "organizer" && (!ql || (u.nick || "").toLowerCase().includes(ql) || (u.so2Id || "").toLowerCase().includes(ql))).slice(0, 6);
     box.innerHTML = list.length ? list.map(u => `
       <div class="c6e-modal-suggest-row">
-        <span><b>${escapeHTML(u.nick)}</b> <span style="color:var(--white-dim); font-size:10.5px;">SO2: ${escapeHTML(u.so2Id || '—')}</span></span>
+        <span><b>${escapeHTML(u.nick)}</b>${renderUserBadgesHTML(u)} <span style="color:var(--white-dim); font-size:10.5px;">SO2: ${escapeHTML(u.so2Id || '—')}</span></span>
         <button type="button" class="auth-submit-btn" style="width:auto; padding:5px 10px; font-size:9.5px;" onclick="window.confirmManualAddParticipant('${tId}', '${escapeHTML(u.nick)}')">+ Добавить</button>
       </div>
     `).join("") : `<div style="font-size:11px; color:var(--white-dim); text-align:center;">Совпадений нет — можно добавить вручную кнопкой выше</div>`;
@@ -6016,7 +6114,7 @@ window.filterManualAddSuggest = (tId, q) => {
     const list = cloudClans.filter(c => !ql || (c.name || "").toLowerCase().includes(ql) || (c.tag || "").toLowerCase().includes(ql)).slice(0, 6);
     box.innerHTML = list.length ? list.map(c => `
       <div class="c6e-modal-suggest-row">
-        <span><b>[${escapeHTML(c.tag)}] ${escapeHTML(c.name)}</b></span>
+        <span><b>[${escapeHTML(c.tag)}] ${escapeHTML(c.name)}</b>${renderClanBadgeHTML(c)}</span>
         <button type="button" class="auth-submit-btn" style="width:auto; padding:5px 10px; font-size:9.5px;" onclick="window.confirmManualAddParticipant('${tId}', '${escapeHTML(c.name)}')">+ Добавить</button>
       </div>
     `).join("") : `<div style="font-size:11px; color:var(--white-dim); text-align:center;">Кланов не найдено — введите название команды вручную</div>`;
