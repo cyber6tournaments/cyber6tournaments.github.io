@@ -8,7 +8,7 @@ import {
   writeBatch, serverTimestamp, query, where, orderBy, limit
 } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup,
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
   sendPasswordResetEmail, onAuthStateChanged, signOut
 } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-auth.js";
@@ -850,7 +850,7 @@ window.showMirrorToast = (msg, isError = false) => {
 
 function getPlayerClan(userObj) {
   if (!userObj || !userObj.clanId) return null;
-  return cloudClans.find(c => c.id === userObj.clanId) || null;
+  return cloudClans.find(c => (userObj.clanId && c.id === userObj.clanId) || (Array.isArray(c.members) && c.members.some(m => m && m.uid === userObj.uid))) || null;
 }
 
 function loadSavedUserSession() {
@@ -1038,6 +1038,7 @@ onSnapshot(collection(db, "clans"), (snap) => {
   snap.forEach(d => list.push({ id: d.id, ...d.data() }));
   cloudClans = list;
   _recordSnapshotHashes("clans", cloudClans, "id");
+  _mergeClanAppsAndInvites();
   renderAllStageSections();
 }, () => {});
 
@@ -1071,6 +1072,23 @@ function _stopPrivateListeners() {
   }
 }
 
+let cloudClanApplications = [];
+let cloudClanInvites = [];
+
+function _mergeClanAppsAndInvites() {
+  cloudClans.forEach(c => {
+    const liveApps = cloudClanApplications.filter(a => a.clanId === c.id && a.status === "pending");
+    const liveInvs = cloudClanInvites.filter(i => i.clanId === c.id && i.status === "pending");
+    // Merge live Firestore collection apps with any local fallback without duplicates
+    const appMap = new Map();
+    liveApps.forEach(a => appMap.set(a.uid, a));
+    c.applications = [...appMap.values()];
+    const invMap = new Map();
+    liveInvs.forEach(i => invMap.set(i.toUid || i.uid, { ...i, uid: i.toUid || i.uid }));
+    c.invites = [...invMap.values()];
+  });
+}
+
 function _startPrivateListeners(uid, isAdm) {
   _stopPrivateListeners();
   let dmSent = [], dmRecv = [];
@@ -1096,6 +1114,40 @@ function _startPrivateListeners(uid, isAdm) {
     cloudNotifications = list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     if (typeof updateNotificationsBadgeUI === "function") updateNotificationsBadgeUI();
     if (typeof renderNotificationsListModal === "function") renderNotificationsListModal();
+  }, () => {}));
+  _privateUnsubs.push(onSnapshot(collection(db, "clan_applications"), (snap) => {
+    const list = [];
+    snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+    cloudClanApplications = list;
+    _mergeClanAppsAndInvites();
+    renderAllStageSections();
+  }, () => {}));
+  _privateUnsubs.push(onSnapshot(query(collection(db, "clan_invites"), where("toUid", "==", uid)), (snap) => {
+    const mine = [];
+    snap.forEach(d => mine.push({ id: d.id, ...d.data() }));
+    cloudClanInvites = [...cloudClanInvites.filter(x => x.toUid !== uid), ...mine];
+    _mergeClanAppsAndInvites();
+    renderAllStageSections();
+  }, () => {}));
+  _privateUnsubs.push(onSnapshot(query(collection(db, "clan_invites"), where("leaderUid", "==", uid)), async (snap) => {
+    const led = [];
+    snap.forEach(d => led.push({ id: d.id, ...d.data() }));
+    cloudClanInvites = [...cloudClanInvites.filter(x => x.leaderUid !== uid), ...led];
+    // Auto-finalize accepted invites when captain is online
+    for (const inv of led) {
+      if (inv.status === "accepted") {
+        const cl = cloudClans.find(c => c.id === inv.clanId);
+        if (cl && !(cl.members || []).some(m => m.uid === inv.toUid) && (cl.members || []).length < 7) {
+          cl.members.push({ uid: inv.toUid, nick: inv.toNick || "Player", so2Id: inv.toSo2Id || "—", role: "Игрок основы" });
+          try {
+            await setDoc(doc(db, "clans", cl.id), _stripProtectedClanFields(cl), { merge: true });
+            await deleteDoc(doc(db, "clan_invites", inv.id));
+          } catch (e) {}
+        }
+      }
+    }
+    _mergeClanAppsAndInvites();
+    renderAllStageSections();
   }, () => {}));
   const ticketRef = isAdm ? collection(db, "tickets") : query(collection(db, "tickets"), where("uid", "==", uid));
   _privateUnsubs.push(onSnapshot(ticketRef, (snap) => {
@@ -2981,23 +3033,17 @@ window.manualAddParticipantToTournament = (tId) => {
   const role = getUserRoleInTournament(currentUser, trn);
   if (!canModerateBracket(role)) return window.showMirrorToast("Нет прав!", true);
   if ((trn.participants || []).length >= trn.maxTeams) return window.showMirrorToast("Слоты заполнены!", true);
-  const name = prompt(trn.format === "1v1" ? "Введите ник игрока для добавления:" : "Введите название/тег команды (например: [NAVI] Natus):");
-  if (!name || !name.trim()) return;
-  const cleanName = name.trim();
-  const entry = {
-    id: "MAN_" + Date.now().toString(36).toUpperCase(),
-    name: cleanName,
-    avatar: `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(cleanName)}`,
-    type: trn.format === "1v1" ? "player" : "clan",
-    checkedIn: true,
-    approved: true
-  };
-  trn.participants = (trn.participants || []).map(p => normalizeParticipantEntry(p, trn.format));
-  trn.participants.push(entry);
-  if (trn.stage === "registration") trn.bracketData = generateSmartBracketData(trn);
-  syncArenaDataToCloud();
-  renderAllStageSections();
-  window.showMirrorToast(`Участник «${cleanName}» добавлен в турнир!`);
+  openSiteGlassModal(
+    trn.format === "1v1" ? "ДОБАВИТЬ ИГРОКА В ТУРНИР" : "ДОБАВИТЬ КОМАНДУ В ТУРНИР",
+    `
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <input type="text" id="man-add-part-inp" class="auth-input" style="padding:9px 12px;" placeholder="${trn.format === '1v1' ? 'Ник или Standoff 2 ID...' : 'Название или тег клана...'}" oninput="window.filterManualAddSuggest('${trn.id}', this.value)">
+        <button type="button" class="auth-submit-btn" style="width:auto; padding:9px 13px; font-size:10px;" onclick="window.confirmManualAddParticipant('${trn.id}')">Добавить</button>
+      </div>
+      <div id="man-add-suggest-box" class="c6e-modal-suggest-list"></div>
+    `
+  );
+  window.filterManualAddSuggest(trn.id, "");
 };
 
 window.playerCheckInTournament = (tId) => {
@@ -4248,50 +4294,42 @@ window.saveClanRecruitmentCriteria = (e) => {
 };
 
 window.applyToJoinClan = (clanId) => {
-  if (!currentUser) return window.goRoute("/authorization");
+  if (!currentUser || !auth.currentUser) return window.goRoute("/authorization");
   if (currentUser.accountType === "organizer") return window.showMirrorToast("Организаторы не вступают в кланы как игроки!", true);
-  if (currentUser.clanId) return window.showMirrorToast("Вы уже состоите в клане!", true);
+  if (getPlayerClan(currentUser)) return window.showMirrorToast("Вы уже состоите в клане!", true);
   const clan = cloudClans.find(c => c.id === clanId);
   if (!clan || !clan.applicationsOpen) return window.showMirrorToast("Набор в этот клан закрыт!", true);
   if ((clan.members || []).length >= 7) return window.showMirrorToast("Состав клана уже заполнен (7/7)!", true);
+  if ((clan.applications || []).some(a => a.uid === currentUser.uid)) return window.showMirrorToast("Вы уже подали заявку в этот клан!");
 
-  clan.applications = Array.isArray(clan.applications) ? clan.applications : [];
-  if (clan.applications.some(a => a.uid === currentUser.uid)) return window.showMirrorToast("Вы уже подали заявку в этот клан!");
-
-  const msg = prompt(`Заявка в клан [${clan.tag}] ${clan.name}.\nНапишите пару слов о себе (роль, опыт, прайм-тайм):`, `${currentUser.playRole || "Рифлер"}, готов к тренировкам и турнирам`);
-  if (msg === null) return;
-
-  clan.applications.unshift({
-    id: "APP_" + Date.now().toString(36).toUpperCase(),
-    uid: currentUser.uid,
-    nick: currentUser.nick,
-    avatar: currentUser.avatar,
-    so2Id: currentUser.so2Id || "—",
-    kd: currentUser.stats?.kd || "0.00",
-    role: currentUser.playRole || "Игрок",
-    message: msg.trim() || "Хочу вступить в клан",
-    createdAt: new Date().toLocaleDateString()
-  });
-
-  pushUserNotification(clan.leaderUid, `Новая заявка в [${clan.tag}]`, `Игрок ${currentUser.nick} (K/D ${currentUser.stats?.kd || "0.00"}) подал заявку на вступление в ваш клан.`, "clan_app", { clanId: clan.id });
-  syncArenaDataToCloud();
-  renderAllStageSections();
-  window.showMirrorToast(`Заявка в клан [${clan.tag}] отправлена капитану!`);
+  openSiteGlassModal(
+    `ЗАЯВКА В КЛАН [${escapeHTML(clan.tag)}] ${escapeHTML(clan.name)}`,
+    `
+      <form onsubmit="window.submitClanApplicationModal(event, '${clan.id}')" style="display:flex; flex-direction:column; gap:10px;">
+        <div style="font-size:11.5px; color:var(--white-soft);">Напишите капитану пару слов о себе (роль, опыт, прайм-тайм):</div>
+        <textarea id="clan-apply-msg-inp" class="auth-input" rows="3" style="padding:10px 12px;" required>${escapeHTML(currentUser.playRole || "Рифлер")}, готов к тренировкам и турнирам</textarea>
+        <button type="submit" class="auth-submit-btn">ОТПРАВИТЬ ЗАЯВКУ КАПИТАНУ</button>
+      </form>
+    `
+  );
 };
 
-window.decideClanApplication = (clanId, appUid, accept) => {
+window.decideClanApplication = async (clanId, appUid, accept) => {
   const clan = cloudClans.find(c => c.id === clanId);
   if (!clan || !currentUser || clan.leaderUid !== currentUser.uid) return window.showMirrorToast("Принимать и отклонять заявки может только Капитан!", true);
-  clan.applications = Array.isArray(clan.applications) ? clan.applications : [];
-  const app = clan.applications.find(a => a.uid === appUid);
+  const app = (clan.applications || []).find(a => a.uid === appUid);
   if (!app) return;
 
-  clan.applications = clan.applications.filter(a => a.uid !== appUid);
+  const appDocId = app.id || `${clan.id}_${appUid}`;
+  try { await deleteDoc(doc(db, "clan_applications", appDocId)); } catch (e) {}
+  clan.applications = (clan.applications || []).filter(a => a.uid !== appUid);
+
   if (accept) {
     if ((clan.members || []).length >= 7) return window.showMirrorToast("Состав клана уже полон (7/7)!", true);
+    if (!(clan.members || []).some(m => m.uid === app.uid)) {
+      clan.members.push({ uid: app.uid, nick: app.nick, so2Id: app.so2Id || "—", role: app.role || "Игрок основы" });
+    }
     const targetU = cloudUsers.find(u => u.uid === appUid);
-    if (targetU && targetU.clanId) return window.showMirrorToast("Игрок уже вступил в другой клан!", true);
-    clan.members.push({ uid: app.uid, nick: app.nick, so2Id: app.so2Id, role: app.role || "Игрок основы" });
     if (targetU) targetU.clanId = clan.id;
     pushUserNotification(appUid, `Заявка принята!`, `Капитан принял вас в клан [${clan.tag}] ${clan.name}. Добро пожаловать в состав!`, "info");
     window.showMirrorToast(`Игрок ${app.nick} принят в клан [${clan.tag}]!`);
@@ -4303,46 +4341,62 @@ window.decideClanApplication = (clanId, appUid, accept) => {
   renderAllStageSections();
 };
 
-window.sendClanInviteToPlayer = (e) => {
+window.sendClanInviteToPlayer = async (e) => {
   e.preventDefault();
   const myClan = getPlayerClan(currentUser);
   if (!myClan || myClan.leaderUid !== currentUser.uid) return window.showMirrorToast("Приглашать в клан может только Капитан!", true);
   if ((myClan.members || []).length >= 7) return window.showMirrorToast("Состав клана уже полон (7/7)!", true);
 
   const nickQ = (document.getElementById("clan-invite-nick-inp")?.value || "").trim().toLowerCase();
-  const targetU = cloudUsers.find(u => u.uid !== currentUser.uid && u.accountType !== "organizer" && String(u.nick || "").toLowerCase() === nickQ);
-  if (!targetU) return window.showMirrorToast("Игрок с таким ником не найден!", true);
-  if (targetU.clanId) return window.showMirrorToast("Этот игрок уже состоит в клане!", true);
+  const targetU = cloudUsers.find(u => u.uid !== currentUser.uid && u.accountType !== "organizer" && (String(u.nick || "").toLowerCase() === nickQ || String(u.so2Id || "").toLowerCase() === nickQ));
+  if (!targetU) return window.showMirrorToast("Игрок с таким ником или SO2 ID не найден!", true);
+  if (getPlayerClan(targetU)) return window.showMirrorToast("Этот игрок уже состоит в клане!", true);
 
-  myClan.invites = Array.isArray(myClan.invites) ? myClan.invites : [];
-  if (myClan.invites.some(inv => inv.uid === targetU.uid)) return window.showMirrorToast("Приглашение этому игроку уже отправлено!");
-
-  myClan.invites.push({ uid: targetU.uid, nick: targetU.nick, createdAt: new Date().toLocaleDateString() });
-  pushUserNotification(targetU.uid, `Приглашение в клан [${myClan.tag}]`, `Капитан ${currentUser.nick} приглашает вас вступить в клан [${myClan.tag}] ${myClan.name}.`, "clan_invite", { clanId: myClan.id });
-  syncArenaDataToCloud();
-  renderAllStageSections();
-  window.showMirrorToast(`Приглашение отправлено игроку ${targetU.nick}!`);
+  const invId = `${myClan.id}_${targetU.uid}`;
+  const invDoc = {
+    id: invId,
+    clanId: myClan.id,
+    leaderUid: currentUser.uid,
+    toUid: targetU.uid,
+    uid: targetU.uid,
+    toNick: targetU.nick,
+    toSo2Id: targetU.so2Id || "—",
+    status: "pending",
+    createdAt: new Date().toLocaleDateString()
+  };
+  try {
+    await setDoc(doc(db, "clan_invites", invId), invDoc);
+    pushUserNotification(targetU.uid, `Приглашение в клан [${myClan.tag}]`, `Капитан ${currentUser.nick} приглашает вас вступить в клан [${myClan.tag}] ${myClan.name}.`, "clan_invite", { clanId: myClan.id });
+    if (document.getElementById("clan-invite-nick-inp")) document.getElementById("clan-invite-nick-inp").value = "";
+    window.showMirrorToast(`Приглашение отправлено игроку ${targetU.nick}!`);
+  } catch (err) {
+    window.showMirrorToast("Ошибка отправки приглашения.", true);
+  }
 };
 
-window.respondClanInvite = (clanId, accept, notifId = null) => {
-  if (!currentUser) return;
+window.respondClanInvite = async (clanId, accept, notifId = null) => {
+  if (!currentUser || !auth.currentUser) return;
   const clan = cloudClans.find(c => c.id === clanId);
   if (notifId) {
     const nf = cloudNotifications.find(n => n.id === notifId);
-    if (nf) nf.read = true;
+    if (nf) {
+      nf.read = true;
+      setDoc(doc(db, "notifications", notifId), { read: true }, { merge: true }).catch(() => {});
+    }
   }
   if (!clan) return window.showMirrorToast("Клан больше не существует.", true);
-  clan.invites = (clan.invites || []).filter(i => i.uid !== currentUser.uid);
+  const invId = `${clan.id}_${auth.currentUser.uid}`;
 
   if (accept) {
-    if (currentUser.clanId) return window.showMirrorToast("Вы уже состоите в клане!", true);
+    if (getPlayerClan(currentUser)) return window.showMirrorToast("Вы уже состоите в клане!", true);
     if ((clan.members || []).length >= 7) return window.showMirrorToast("Состав клана уже заполнен!", true);
-    clan.members.push({ uid: currentUser.uid, nick: currentUser.nick, so2Id: currentUser.so2Id || "—", role: currentUser.playRole || "Игрок основы" });
+    try { await setDoc(doc(db, "clan_invites", invId), { status: "accepted" }, { merge: true }); } catch (e) {}
     currentUser.clanId = clan.id;
-    pushUserNotification(clan.leaderUid, `Игрок принял приглашение`, `${currentUser.nick} вступил в ваш клан [${clan.tag}]!`, "info");
+    pushUserNotification(clan.leaderUid, `Игрок принял приглашение`, `${currentUser.nick} принял ваше приглашение в клан [${clan.tag}]!`, "info");
     window.showMirrorToast(`Вы вступили в клан [${clan.tag}] ${clan.name}!`);
     window.closeNotificationsModal();
   } else {
+    try { await deleteDoc(doc(db, "clan_invites", invId)); } catch (e) {}
     pushUserNotification(clan.leaderUid, `Приглашение отклонено`, `${currentUser.nick} отклонил приглашение в [${clan.tag}].`, "info");
     window.showMirrorToast("Приглашение отклонено.");
   }
@@ -4362,11 +4416,16 @@ window.openDirectChatWith = (peerUid) => {
 };
 
 window.startNewDmByNick = () => {
-  const nick = prompt("Введите ник игрока или организатора для личного сообщения:");
-  if (!nick || !nick.trim()) return;
-  const target = cloudUsers.find(u => u.uid !== currentUser.uid && String(u.nick || "").toLowerCase() === nick.trim().toLowerCase());
-  if (!target) return window.showMirrorToast("Пользователь с таким ником не найден!", true);
-  window.openDirectChatWith(target.uid);
+  openSiteGlassModal(
+    "НОВОЕ ЛИЧНОЕ СООБЩЕНИЕ",
+    `
+      <form onsubmit="window.submitStartDmModal(event)" style="display:flex; flex-direction:column; gap:10px;">
+        <div style="font-size:11.5px; color:var(--white-soft);">Введите ник или Standoff 2 ID игрока / организатора:</div>
+        <input type="text" id="dm-start-nick-inp" class="auth-input" style="padding:10px 12px;" placeholder="Например: Kas" required>
+        <button type="submit" class="auth-submit-btn">ОТКРЫТЬ ДИАЛОГ</button>
+      </form>
+    `
+  );
 };
 
 window.sendGlobalChatMessage = async (e) => {
@@ -5472,7 +5531,7 @@ function renderLoginSection() {
           <span class="auth-social-lbl">или войдите через платформу</span>
           <div class="auth-social-buttons">
             <button type="button" class="social-auth-btn" onclick="window.loginWithSocialPlatform('Google')"><i class="fab fa-google" style="color:#ea4335;"></i> Google</button>
-            <button type="button" class="social-auth-btn" onclick="window.loginWithSocialPlatform('VK')"><i class="fab fa-vk" style="color:#0077ff;"></i> VK</button>
+            
           </div>
         </div>
       </div>
@@ -5621,43 +5680,68 @@ window.submitNewAccountRegister = async (e) => {
   }
 };
 
+async function _finalizeGoogleFirebaseUser(fbUser) {
+  if (!fbUser) return;
+  const isFounderEmail = String(fbUser.email || "").toLowerCase() === FOUNDER_ADMIN_EMAIL;
+  const idx = cloudUsers.findIndex(u => u.uid === fbUser.uid);
+  if (idx >= 0) return completeUserSessionLogin(cloudUsers[idx], true, false);
+  const regLoc = detectUserRegionData();
+  const cleanN = isFounderEmail ? "Kas" : ((fbUser.displayName || "Player").replace(/[^A-Za-z]/g, "").slice(0, 14) || "Player");
+  const gUser = {
+    uid: fbUser.uid,
+    username: cleanN.toLowerCase(),
+    email: fbUser.email || "",
+    nick: cleanN,
+    accountType: isFounderEmail ? "player" : registerAccountType,
+    isAdmin: isFounderEmail,
+    isVerifiedOrganizer: isFounderEmail,
+    organizerStatus: isFounderEmail ? "verified" : (registerAccountType === "organizer" ? "unverified" : null),
+    orgName: "", orgSocials: {}, orgStaff: [], subscribers: [],
+    so2Id: isFounderEmail ? "C6E-000001" : "", so2IdUpdatedAt: 0, so2IdChangeRequested: false, so2ProfileLink: "",
+    age: "", region: regLoc.label, regionFlag: regLoc.flag, playRole: isFounderEmail ? "Капитан (IGL)" : "Рифлер / Энтри",
+    avatar: fbUser.photoURL || `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(cleanN)}`,
+    banner: "", provider: "Google", clanId: null,
+    cp: 0, kills: 0, deaths: 0, wins: 0, losses: 0, matchesPlayed: 0,
+    profileCompleted: isFounderEmail,
+    stats: { kd: "0.00", kills: 0, deaths: 0, impact: 0, matchesPlayed: 0, wins: 0, losses: 0 },
+    matchHistory: []
+  };
+  await setDoc(doc(db, "users", fbUser.uid), _cleanForFirestore(gUser), { merge: true });
+  cloudUsers.push(gUser);
+  return completeUserSessionLogin(gUser, true, !isFounderEmail);
+}
+
+// Handle mobile Google Redirect result automatically on return
+getRedirectResult(auth).then(res => {
+  if (res && res.user) _finalizeGoogleFirebaseUser(res.user);
+}).catch(() => {});
+
 window.loginWithSocialPlatform = async (platform) => {
   if (platform !== "Google") {
-    return window.showMirrorToast("Для максимальной безопасности используйте вход через Google или Email.", true);
+    return window.showMirrorToast("Вход через VK недоступен без бэкенда — используйте Google или Email.", true);
   }
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
   try {
-    const res = await signInWithPopup(auth, new GoogleAuthProvider());
-    if (!res || !res.user) return;
-    const fbUser = res.user;
-    const isFounderEmail = String(fbUser.email || "").toLowerCase() === FOUNDER_ADMIN_EMAIL;
-    const idx = cloudUsers.findIndex(u => u.uid === fbUser.uid);
-    if (idx >= 0) return completeUserSessionLogin(cloudUsers[idx], true, false);
-    const regLoc = detectUserRegionData();
-    const cleanN = isFounderEmail ? "Kas" : ((fbUser.displayName || "Player").replace(/[^A-Za-z]/g, "").slice(0, 14) || "Player");
-    const gUser = {
-      uid: fbUser.uid,
-      username: cleanN.toLowerCase(),
-      email: fbUser.email || "",
-      nick: cleanN,
-      accountType: isFounderEmail ? "player" : registerAccountType,
-      isAdmin: isFounderEmail,
-      isVerifiedOrganizer: isFounderEmail,
-      organizerStatus: isFounderEmail ? "verified" : (registerAccountType === "organizer" ? "unverified" : null),
-      orgName: "", orgSocials: {}, orgStaff: [], subscribers: [],
-      so2Id: isFounderEmail ? "C6E-000001" : "", so2IdUpdatedAt: 0, so2IdChangeRequested: false, so2ProfileLink: "",
-      age: "", region: regLoc.label, regionFlag: regLoc.flag, playRole: isFounderEmail ? "Капитан (IGL)" : "Рифлер / Энтри",
-      avatar: fbUser.photoURL || `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(cleanN)}`,
-      banner: "", provider: "Google", clanId: null,
-      cp: 0, kills: 0, deaths: 0, wins: 0, losses: 0, matchesPlayed: 0,
-      profileCompleted: isFounderEmail,
-      stats: { kd: "0.00", kills: 0, deaths: 0, impact: 0, matchesPlayed: 0, wins: 0, losses: 0 },
-      matchHistory: []
-    };
-    await setDoc(doc(db, "users", fbUser.uid), _cleanForFirestore(gUser));
-    cloudUsers.push(gUser);
-    return completeUserSessionLogin(gUser, true, !isFounderEmail);
+    const res = await signInWithPopup(auth, provider);
+    if (res && res.user) await _finalizeGoogleFirebaseUser(res.user);
   } catch (err) {
-    window.showMirrorToast("Вход через Google отменён или домен не добавлен в Firebase Auth.", true);
+    const code = err?.code || "";
+    if (code === "auth/popup-blocked" || code === "auth/operation-not-supported-in-this-environment") {
+      try {
+        await signInWithRedirect(auth, provider);
+        return;
+      } catch (e2) {}
+    }
+    if (code === "auth/unauthorized-domain") {
+      window.showMirrorToast("Добавьте домен cyber6tournaments.github.io в Firebase → Authentication → Settings → Authorized domains!", true);
+    } else if (code === "auth/operation-not-allowed") {
+      window.showMirrorToast("Включите провайдер Google в Firebase → Authentication → Sign-in method!", true);
+    } else if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
+      window.showMirrorToast("Окно входа Google было закрыто.", true);
+    } else {
+      window.showMirrorToast(`Ошибка Google входа (${code || "unknown"}). Проверьте настройки Firebase Auth.`, true);
+    }
   }
 };
 
@@ -5747,3 +5831,202 @@ if (typeof MutationObserver !== "undefined") {
   _logoObs.observe(document.body, { childList: true, subtree: true });
 }
 setTimeout(upgradeLogosTo3DTransparent, 30);
+
+// ============================================================================
+// V28: ЭЛЕГАНТНЫЕ СТЕКЛЯННЫЕ МОДАЛЬНЫЕ ОКНА САЙТА (ВМЕСТО СИСТЕМНЫХ PROMPT)
+// ============================================================================
+function openSiteGlassModal(title, bodyHTML) {
+  let bd = document.getElementById("c6e-glass-modal-backdrop");
+  if (!bd) {
+    bd = document.createElement("div");
+    bd.id = "c6e-glass-modal-backdrop";
+    bd.className = "c6e-glass-modal-backdrop";
+    bd.onclick = (ev) => { if (ev.target === bd) window.closeSiteGlassModal(); };
+    document.body.appendChild(bd);
+  }
+  bd.innerHTML = `
+    <div class="c6e-glass-modal-card">
+      <div class="c6e-modal-head">
+        <div class="c6e-modal-title">${title}</div>
+        <button type="button" class="c6e-modal-close" onclick="window.closeSiteGlassModal()">✕</button>
+      </div>
+      <div>${bodyHTML}</div>
+    </div>
+  `;
+  bd.classList.add("open");
+}
+
+window.closeSiteGlassModal = () => {
+  const bd = document.getElementById("c6e-glass-modal-backdrop");
+  if (bd) bd.classList.remove("open");
+};
+
+window.copyTournamentInviteUrlFromModal = (url) => {
+  try { navigator.clipboard.writeText(url); } catch (e) {}
+  window.showMirrorToast("Ссылка-приглашение на турнир скопирована!");
+};
+
+window.sendTournamentInviteNotification = (tId, targetUid) => {
+  const trn = cloudTournaments.find(t => t.id === tId);
+  const target = cloudUsers.find(u => u.uid === targetUid);
+  if (!trn || !target || !currentUser) return;
+  pushUserNotification(
+    target.uid,
+    `Приглашение на турнир «${trn.name}»`,
+    `${currentUser.nick} приглашает вас принять участие в турнире (${trn.format}, приз ${trn.prizeGold} Gold).`,
+    "info",
+    { tournamentId: trn.id }
+  );
+  window.showMirrorToast(`Приглашение отправлено игроку ${target.nick}!`);
+};
+
+window.openTournamentInviteModal = (tId) => {
+  const trn = cloudTournaments.find(t => t.id === tId);
+  if (!trn) return;
+  const shareUrl = `${PLATFORM_DOMAIN}/?trn=${encodeURIComponent(trn.id)}`;
+  const tgShare = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(`Присоединяйся к турниру ${trn.name} (${trn.format}, ${trn.prizeGold} Gold) на CYBER 6 TOURNAMENT!`)}`;
+  openSiteGlassModal(
+    `ПРИГЛАСИТЬ НА ТУРНИР`,
+    `
+      <div style="font-size:11.5px; color:var(--white-soft); margin-bottom:8px;">Прямая ссылка-приглашение на <b>${escapeHTML(trn.name)}</b>:</div>
+      <div class="c6e-modal-link-box" style="margin-bottom:10px;">
+        <input type="text" class="auth-input allow-copy" style="padding:9px 11px; font-size:11px;" value="${escapeHTML(shareUrl)}" readonly onclick="this.select()">
+        <button type="button" class="auth-submit-btn" style="width:auto; padding:9px 13px; font-size:10px;" onclick="window.copyTournamentInviteUrlFromModal('${escapeHTML(shareUrl)}')">Копировать</button>
+      </div>
+      <a href="${tgShare}" target="_blank" rel="noopener" class="social-auth-btn" style="width:100%; justify-content:center; text-decoration:none; margin-bottom:12px;">
+        <i class="fab fa-telegram-plane" style="color:#38bdf8;"></i> Отправить ссылку в Telegram
+      </a>
+      <div class="auth-label" style="margin-bottom:6px;">Пригласить игрока с сайта по нику или SO2 ID:</div>
+      <input type="text" id="trn-inv-search-inp" class="auth-input" style="padding:9px 12px; margin-bottom:8px;" placeholder="Введите ник или SO2 ID..." oninput="window.filterTrnInviteSuggest('${trn.id}', this.value)">
+      <div id="trn-inv-suggest-box" class="c6e-modal-suggest-list"></div>
+    `
+  );
+  window.filterTrnInviteSuggest(trn.id, "");
+};
+
+window.filterTrnInviteSuggest = (tId, q) => {
+  const box = document.getElementById("trn-inv-suggest-box");
+  if (!box) return;
+  const ql = String(q || "").trim().toLowerCase();
+  const list = cloudUsers.filter(u => u.uid !== currentUser?.uid && u.accountType !== "organizer" && (
+    !ql || (u.nick || "").toLowerCase().includes(ql) || (u.so2Id || "").toLowerCase().includes(ql)
+  )).slice(0, 6);
+  if (list.length === 0) {
+    box.innerHTML = `<div style="font-size:11.5px; color:var(--white-dim); text-align:center; padding:8px;">Игроки не найдены</div>`;
+    return;
+  }
+  box.innerHTML = list.map(u => `
+    <div class="c6e-modal-suggest-row">
+      <span><b>${escapeHTML(u.nick)}</b> <span style="color:var(--white-dim); font-size:10.5px;">ID: ${escapeHTML(u.so2Id || '—')}</span></span>
+      <button type="button" class="auth-submit-btn" style="width:auto; padding:5px 10px; font-size:9.5px;" onclick="window.sendTournamentInviteNotification('${tId}', '${u.uid}')">Пригласить</button>
+    </div>
+  `).join("");
+};
+
+window.confirmManualAddParticipant = (tId, customVal = null) => {
+  const trn = cloudTournaments.find(t => t.id === tId);
+  if (!trn || !currentUser) return;
+  const raw = customVal !== null ? customVal : (document.getElementById("man-add-part-inp")?.value || "");
+  const cleanName = String(raw).trim();
+  if (!cleanName) return window.showMirrorToast("Введите ник, SO2 ID или название команды!", true);
+  if ((trn.participants || []).length >= trn.maxTeams) return window.showMirrorToast("Слоты заполнены!", true);
+
+  let entry;
+  if (trn.format === "1v1") {
+    const matchedU = cloudUsers.find(u => (u.nick || "").toLowerCase() === cleanName.toLowerCase() || (u.so2Id || "").toLowerCase() === cleanName.toLowerCase());
+    entry = {
+      id: matchedU ? matchedU.uid : ("MAN_" + Date.now().toString(36).toUpperCase()),
+      name: matchedU ? matchedU.nick : cleanName,
+      avatar: matchedU ? matchedU.avatar : `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(cleanName)}`,
+      type: "player", checkedIn: true, approved: true
+    };
+  } else {
+    const matchedC = cloudClans.find(c => (c.name || "").toLowerCase() === cleanName.toLowerCase() || (c.tag || "").toLowerCase() === cleanName.toLowerCase());
+    entry = {
+      id: matchedC ? matchedC.id : ("MAN_" + Date.now().toString(36).toUpperCase()),
+      name: matchedC ? `[${matchedC.tag}] ${matchedC.name}` : cleanName,
+      avatar: matchedC ? matchedC.avatar : `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(cleanName)}`,
+      type: "clan", checkedIn: true, approved: true
+    };
+  }
+  trn.participants = (trn.participants || []).map(p => normalizeParticipantEntry(p, trn.format));
+  if (trn.participants.some(p => p.id === entry.id || p.name.toLowerCase() === entry.name.toLowerCase())) {
+    return window.showMirrorToast("Этот участник уже добавлен в турнир!", true);
+  }
+  trn.participants.push(entry);
+  trn.bracketData = generateSmartBracketData(trn);
+  syncArenaDataToCloud();
+  renderAllStageSections();
+  window.closeSiteGlassModal();
+  window.showMirrorToast(`Участник «${entry.name}» добавлен в турнир!`);
+};
+
+window.filterManualAddSuggest = (tId, q) => {
+  const box = document.getElementById("man-add-suggest-box");
+  const trn = cloudTournaments.find(t => t.id === tId);
+  if (!box || !trn) return;
+  const ql = String(q || "").trim().toLowerCase();
+  if (trn.format === "1v1") {
+    const list = cloudUsers.filter(u => u.accountType !== "organizer" && (!ql || (u.nick || "").toLowerCase().includes(ql) || (u.so2Id || "").toLowerCase().includes(ql))).slice(0, 6);
+    box.innerHTML = list.length ? list.map(u => `
+      <div class="c6e-modal-suggest-row">
+        <span><b>${escapeHTML(u.nick)}</b> <span style="color:var(--white-dim); font-size:10.5px;">SO2: ${escapeHTML(u.so2Id || '—')}</span></span>
+        <button type="button" class="auth-submit-btn" style="width:auto; padding:5px 10px; font-size:9.5px;" onclick="window.confirmManualAddParticipant('${tId}', '${escapeHTML(u.nick)}')">+ Добавить</button>
+      </div>
+    `).join("") : `<div style="font-size:11px; color:var(--white-dim); text-align:center;">Совпадений нет — можно добавить вручную кнопкой выше</div>`;
+  } else {
+    const list = cloudClans.filter(c => !ql || (c.name || "").toLowerCase().includes(ql) || (c.tag || "").toLowerCase().includes(ql)).slice(0, 6);
+    box.innerHTML = list.length ? list.map(c => `
+      <div class="c6e-modal-suggest-row">
+        <span><b>[${escapeHTML(c.tag)}] ${escapeHTML(c.name)}</b></span>
+        <button type="button" class="auth-submit-btn" style="width:auto; padding:5px 10px; font-size:9.5px;" onclick="window.confirmManualAddParticipant('${tId}', '${escapeHTML(c.name)}')">+ Добавить</button>
+      </div>
+    `).join("") : `<div style="font-size:11px; color:var(--white-dim); text-align:center;">Кланов не найдено — введите название команды вручную</div>`;
+  }
+};
+
+window.submitClanApplicationModal = async (e, clanId) => {
+  e.preventDefault();
+  if (!currentUser || !auth.currentUser) return window.goRoute("/authorization");
+  const clan = cloudClans.find(c => c.id === clanId);
+  if (!clan) return;
+  const msg = (document.getElementById("clan-apply-msg-inp")?.value || "").trim() || "Хочу вступить в клан";
+  const appId = `${clan.id}_${auth.currentUser.uid}`;
+  const appDoc = {
+    id: appId,
+    clanId: clan.id,
+    leaderUid: clan.leaderUid,
+    uid: auth.currentUser.uid,
+    nick: currentUser.nick,
+    avatar: currentUser.avatar,
+    so2Id: currentUser.so2Id || "—",
+    kd: currentUser.stats?.kd || "0.00",
+    role: currentUser.playRole || "Игрок",
+    message: msg.slice(0, 240),
+    status: "pending",
+    createdAt: new Date().toLocaleDateString()
+  };
+  try {
+    await setDoc(doc(db, "clan_applications", appId), appDoc);
+    pushUserNotification(
+      clan.leaderUid,
+      `Новая заявка в [${clan.tag}]`,
+      `Игрок ${currentUser.nick} (K/D ${appDoc.kd}) подал заявку на вступление в ваш клан.`,
+      "clan_app",
+      { clanId: clan.id }
+    );
+    window.closeSiteGlassModal();
+    window.showMirrorToast(`Заявка в клан [${clan.tag}] отправлена капитану!`);
+  } catch (err) {
+    window.showMirrorToast("Не удалось отправить заявку. Убедитесь, что вы вошли в аккаунт.", true);
+  }
+};
+
+window.submitStartDmModal = (e) => {
+  e.preventDefault();
+  const q = (document.getElementById("dm-start-nick-inp")?.value || "").trim().toLowerCase();
+  const target = cloudUsers.find(u => u.uid !== currentUser?.uid && (String(u.nick || "").toLowerCase() === q || String(u.so2Id || "").toLowerCase() === q));
+  if (!target) return window.showMirrorToast("Игрок с таким ником или ID не найден!", true);
+  window.closeSiteGlassModal();
+  window.openDirectChatWith(target.uid);
+};
