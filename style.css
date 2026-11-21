@@ -3442,3 +3442,137 @@ body.on-login-route .c6e-site-footer {
   border: 1px solid rgba(255, 255, 255, 0.2);
   cursor: pointer;
 }
+
+/* === V28 FIXES: MOBILE TOPBAR CLAN PILL FIT + ELEGANT SITE GLASS MODALS === */
+@media (max-width: 768px) {
+  .mirror-topbar-inner {
+    padding: 0 10px !important;
+    gap: 6px !important;
+    overflow: hidden !important;
+  }
+  .topbar-brand {
+    flex-shrink: 0 !important;
+    gap: 6px !important;
+  }
+  .topbar-logo-wrap {
+    width: 36px !important;
+    height: 36px !important;
+  }
+  .topbar-title-main { font-size: 12px !important; letter-spacing: 0.5px !important; }
+  .topbar-title-sub  { font-size: 7.5px !important; letter-spacing: 1px !important; }
+  .topbar-player-cluster {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    justify-content: flex-end !important;
+    gap: 5px !important;
+    overflow: hidden !important;
+  }
+  .topbar-icon-btn {
+    width: 32px !important;
+    height: 32px !important;
+    flex-shrink: 0 !important;
+    font-size: 12px !important;
+  }
+  .player-profile-pill {
+    min-width: 0 !important;
+    max-width: 136px !important;
+    padding: 3px 7px 3px 4px !important;
+    gap: 6px !important;
+    overflow: hidden !important;
+  }
+  .player-avatar-wrap {
+    width: 28px !important;
+    height: 28px !important;
+    flex-shrink: 0 !important;
+  }
+  .player-profile-pill > div:last-child,
+  .player-pill-meta,
+  .player-text-col {
+    min-width: 0 !important;
+    max-width: 92px !important;
+    overflow: hidden !important;
+  }
+  .player-profile-pill span,
+  .player-profile-pill div {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* Custom Site-Native Transparent Glass Modal (replaces browser prompt()) */
+.c6e-glass-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99990;
+  background: rgba(2, 2, 4, 0.78);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.c6e-glass-modal-backdrop.open {
+  display: flex;
+}
+.c6e-glass-modal-card {
+  width: 100%;
+  max-width: 440px;
+  border-radius: 18px;
+  padding: 20px 20px 18px 20px;
+  background: linear-gradient(155deg, rgba(16, 12, 12, 0.94), rgba(6, 6, 8, 0.96));
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  animation: c6eModalPop 0.18s ease-out;
+}
+@keyframes c6eModalPop {
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.c6e-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.c6e-modal-title {
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 900;
+  color: #ffffff;
+  letter-spacing: 0.7px;
+}
+.c6e-modal-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: #ffffff;
+  cursor: pointer;
+}
+.c6e-modal-link-box {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.c6e-modal-suggest-list {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.c6e-modal-suggest-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 12px;
+}
