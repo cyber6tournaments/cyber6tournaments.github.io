@@ -3273,3 +3273,64 @@ body.on-login-route .arena-stage-wrap {
     margin-bottom: 92px;
   }
 }
+
+/* === V24 FIXES: AUTH VERTICAL LAYOUT + FRAMELESS 1.2X SLOW-SPINNING LOGO === */
+body.on-login-route .arena-stage-wrap {
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 22px !important;
+  padding: 20px 14px 28px 14px !important;
+}
+body.on-login-route #sec-login {
+  width: 100% !important;
+  display: flex !important;
+  justify-content: center !important;
+}
+body.on-login-route .c6e-site-footer {
+  width: 100% !important;
+  max-width: 440px !important;
+  margin: 0 auto 16px auto !important;
+}
+
+@keyframes c6eLogoSlowSpin {
+  0% { transform: rotateY(0deg); }
+  100% { transform: rotateY(360deg); }
+}
+
+.auth-logo-wrap {
+  width: 96px !important;
+  height: 96px !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
+  perspective: 600px;
+}
+.topbar-logo-wrap {
+  width: 48px !important;
+  height: 48px !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
+  perspective: 500px;
+}
+.c6e-footer-brand img {
+  width: 42px !important;
+  height: 42px !important;
+  border: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  animation: c6eLogoSlowSpin 9s linear infinite;
+  will-change: transform;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.55));
+}
+.auth-logo-img,
+.topbar-logo-img {
+  animation: c6eLogoSlowSpin 9s linear infinite;
+  will-change: transform;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.55));
+}
