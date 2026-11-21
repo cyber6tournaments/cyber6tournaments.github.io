@@ -556,6 +556,30 @@ function getMatchElapsedMs(match) {
   return Math.max(0, endRef - match.startedAt - (match.pausedAccumMs || 0));
 }
 
+
+function advanceWinnerToNextRound(trn, match, winnerObj) {
+  if (!trn || !trn.bracketData || !match || !winnerObj) return;
+  const loserObj = match.winner === "A" ? match.teamB : match.teamA;
+  if (match.bracketSide === "upper" && trn.bracketData.rounds && trn.bracketData.rounds[match.roundIdx + 1]) {
+    const nextM = trn.bracketData.rounds[match.roundIdx + 1][Math.floor(match.matchIdx / 2)];
+    if (nextM) {
+      if (match.matchIdx % 2 === 0) nextM.teamA = winnerObj;
+      else nextM.teamB = winnerObj;
+    }
+  }
+  if (trn.bracketType === "Double Elimination" && match.bracketSide === "upper" && match.roundIdx === 0 && loserObj && trn.bracketData.lowerRounds?.[0]) {
+    const lowerM = trn.bracketData.lowerRounds[0][Math.floor(match.matchIdx / 2)];
+    if (lowerM) {
+      if (match.matchIdx % 2 === 0) lowerM.teamA = loserObj;
+      else lowerM.teamB = loserObj;
+    }
+  }
+  if (match.roundName === "ГРАНД-ФИНАЛ") {
+    trn.champion = winnerObj;
+    trn.runnerUp = loserObj || null;
+  }
+}
+
 function lockMatchFinalDuration(match) {
   if (!match) return;
   const now = Date.now();
@@ -637,24 +661,16 @@ window.uploadSeriesMapTab = (tId, matchId, mapIdx) => {
   inp.click();
 };
 
-window.confirmSeriesMapScore = (tId, matchId, mapIdx) => {
+window.submitSeriesMapScoreModal = (e, tId, matchId, mapIdx) => {
+  e.preventDefault();
   const trn = cloudTournaments.find(t => t.id === tId);
   const match = trn ? findMatchInTournament(trn, matchId) : null;
   if (!trn || !match || !currentUser) return;
-  if (!canModerateBracket(getUserRoleInTournament(currentUser, trn))) {
-    return window.showMirrorToast("Подтвердить итоговый счёт карты может судья или организатор!", true);
-  }
   const rules = getSeriesRulesMeta(getEffectiveMatchSeriesFormat(trn, match));
   const curSlot = (match.seriesMaps && match.seriesMaps[mapIdx]) || {};
-  const mapName = prompt(`Название карты №${mapIdx + 1}:`, curSlot.map || match.map || "Sandstone");
-  if (!mapName) return;
-  const sAStr = prompt(`Счёт раундов команды A (${getMatchSideName(match.teamA)}) на карте ${mapName}:`, String(curSlot.scoreA ?? 13));
-  if (sAStr === null) return;
-  const sBStr = prompt(`Счёт раундов команды B (${getMatchSideName(match.teamB)}) на карте ${mapName}:`, String(curSlot.scoreB ?? 0));
-  if (sBStr === null) return;
-
-  const sA = Math.max(0, parseInt(sAStr, 10) || 0);
-  const sB = Math.max(0, parseInt(sBStr, 10) || 0);
+  const mapName = (document.getElementById("sm-map-sel")?.value || curSlot.map || "Sandstone").trim();
+  const sA = Math.max(0, parseInt(document.getElementById("sm-score-a")?.value || "0", 10) || 0);
+  const sB = Math.max(0, parseInt(document.getElementById("sm-score-b")?.value || "0", 10) || 0);
   if (sA === sB) return window.showMirrorToast("В Standoff 2 карта не может закончиться вничью!", true);
 
   const now = Date.now();
@@ -666,7 +682,7 @@ window.confirmSeriesMapScore = (tId, matchId, mapIdx) => {
   match.seriesMaps[mapIdx] = {
     ...curSlot,
     mapIndex: mapIdx,
-    map: mapName.trim(),
+    map: mapName,
     scoreA: sA,
     scoreB: sB,
     winner: sA > sB ? "A" : "B",
@@ -679,20 +695,17 @@ window.confirmSeriesMapScore = (tId, matchId, mapIdx) => {
   const wonB = completed.filter(x => x.winner === "B").length;
   match.scoreA = rules.code === "BO1" ? sA : wonA;
   match.scoreB = rules.code === "BO1" ? sB : wonB;
-  match.map = mapName.trim();
+  match.map = mapName;
 
   appendTournamentAuditLog(trn, `${rules.code} Карта ${mapIdx + 1} (${mapName}): ${sA}:${sB} → счёт серии ${wonA}:${wonB}`);
 
-  // Автоматическое закрытие серии при достижении нужного числа побед
   let seriesClosed = false;
   if (wonA >= rules.winsNeeded || wonB >= rules.winsNeeded) {
     match.winner = wonA >= rules.winsNeeded ? "A" : "B";
     match.status = "finished";
     lockMatchFinalDuration(match);
     seriesClosed = true;
-    if (typeof advanceWinnerToNextRound === "function") {
-      advanceWinnerToNextRound(trn, match, match.winner === "A" ? match.teamA : match.teamB);
-    }
+    advanceWinnerToNextRound(trn, match, match.winner === "A" ? match.teamA : match.teamB);
   } else if (rules.allowDraw && completed.length >= rules.maxMaps) {
     match.winner = "DRAW";
     match.status = "finished";
@@ -700,14 +713,50 @@ window.confirmSeriesMapScore = (tId, matchId, mapIdx) => {
     seriesClosed = true;
   }
 
+  window.closeSiteGlassModal();
   syncLiveMatchesRegistry();
   syncArenaDataToCloud();
   renderAllStageSections();
   if (seriesClosed) {
     window.showMirrorToast(`Серия ${rules.code} завершена (${wonA}:${wonB})! Время игры: ${match.durationFormatted}.`);
   } else {
-    window.showMirrorToast(`Карта ${mapIdx + 1} зафиксирована (${sA}:${sB}). Счёт серии: ${wonA}:${wonB} — открыта Карта ${mapIdx + 2}!`);
+    window.showMirrorToast(`Карта ${mapIdx + 1} зафиксирована (${sA}:${sB}). Счёт серии: ${wonA}:${wonB}!`);
   }
+};
+
+window.confirmSeriesMapScore = (tId, matchId, mapIdx) => {
+  const trn = cloudTournaments.find(t => t.id === tId);
+  const match = trn ? findMatchInTournament(trn, matchId) : null;
+  if (!trn || !match || !currentUser) return;
+  if (!canModerateBracket(getUserRoleInTournament(currentUser, trn))) {
+    return window.showMirrorToast("Подтвердить итоговый счёт карты может судья или организатор!", true);
+  }
+  const curSlot = (match.seriesMaps && match.seriesMaps[mapIdx]) || {};
+  const curMap = curSlot.map || match.map || "Sandstone";
+  openSiteGlassModal(
+    `ИТОГ КАРТЫ №${mapIdx + 1}`,
+    `
+      <form onsubmit="window.submitSeriesMapScoreModal(event, '${tId}', '${matchId}', ${mapIdx})" style="display:flex; flex-direction:column; gap:10px;">
+        <div>
+          <label class="auth-label">Карта Standoff 2</label>
+          <select id="sm-map-sel" class="auth-input" style="padding:9px 12px;">
+            ${OFFICIAL_SO2_MAPS.map(mp => `<option value="${mp}" ${mp === curMap ? 'selected' : ''}>${mp}</option>`).join("")}
+          </select>
+        </div>
+        <div class="c6e-modal-field-row">
+          <div>
+            <label class="auth-label">${escapeHTML(getMatchSideName(match.teamA))}</label>
+            <input type="number" id="sm-score-a" class="auth-input" style="padding:9px 12px;" min="0" max="30" value="${curSlot.scoreA ?? 13}" required>
+          </div>
+          <div>
+            <label class="auth-label">${escapeHTML(getMatchSideName(match.teamB))}</label>
+            <input type="number" id="sm-score-b" class="auth-input" style="padding:9px 12px;" min="0" max="30" value="${curSlot.scoreB ?? 0}" required>
+          </div>
+        </div>
+        <button type="submit" class="auth-submit-btn">ЗАФИКСИРОВАТЬ СЧЁТ КАРТЫ</button>
+      </form>
+    `
+  );
 };
 
 function renderMatchTimerBarHTML(trn, match, isMod) {
@@ -926,7 +975,7 @@ window.showMirrorToast = (msg, isError = false) => {
 };
 
 function getPlayerClan(userObj) {
-  if (!userObj || !userObj.clanId) return null;
+  if (!userObj) return null;
   return cloudClans.find(c => c.leaderUid === userObj.uid || (userObj.clanId && c.id === userObj.clanId) || (Array.isArray(c.members) && c.members.some(m => m && m.uid === userObj.uid))) || null;
 }
 
@@ -935,7 +984,7 @@ function loadSavedUserSession() {
     [
       "c6e_stage3_users", "c6e_stage3_clans", "c6e_stage3_tournaments",
       "c6e_stage3_matches", "c6e_stage3_tickets", "c6e_stage3_gchat",
-      "c6e_stage3_dms", "c6e_stage3_notifs", "c6e_active_user_v29"
+      "c6e_stage3_dms", "c6e_stage3_notifs", "c6e_stage3_current_user"
     ].forEach(k => {
       localStorage.removeItem(k);
       sessionStorage.removeItem(k);
@@ -1509,7 +1558,7 @@ function activateRouteView(route, pushHistory = true) {
     btn.classList.toggle("active", btn.getAttribute("data-route") === cleanRoute);
   });
 
-  renderAllStageSections();
+  renderAllStageSections(true);
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -1519,21 +1568,36 @@ window.addEventListener("popstate", () => {
   else activateRouteView(r, false);
 });
 
-function renderAllStageSections() {
+let _renderRafId = null;
+function _renderActiveRouteNow() {
+  _renderRafId = null;
   updateTopRightPlayerUI();
-  renderMainShowcaseSection();
-  renderLoginSection();
-  renderPlayerProfileSection();
-  renderTeamsSearchSection();
-  renderLeaderboardSection();
-  renderClanProfileSection();
-  renderTournamentsSection();
-  renderOrganizerPanelSection();
-  renderMatchesSection();
-  renderScheduleSection();
-  renderChatSection();
   updateNotificationsBadgeUI();
-  renderExtraSections();
+  switch (currentRoute) {
+    case "/feed": renderMainShowcaseSection(); break;
+    case "/authorization": renderLoginSection(); break;
+    case "/profile": renderPlayerProfileSection(); break;
+    case "/teams": renderTeamsSearchSection(); break;
+    case "/leaderboard": renderLeaderboardSection(); break;
+    case "/clan": renderClanProfileSection(); break;
+    case "/tournaments": renderTournamentsSection(); break;
+    case "/organizer": renderOrganizerPanelSection(); break;
+    case "/matches": renderMatchesSection(); break;
+    case "/schedule": renderScheduleSection(); break;
+    case "/chat": renderChatSection(); break;
+    case "/rules":
+    case "/support":
+    case "/admin": renderExtraSections(); break;
+    default: renderMainShowcaseSection(); break;
+  }
+}
+function renderAllStageSections(immediate = false) {
+  if (immediate) {
+    if (_renderRafId) { cancelAnimationFrame(_renderRafId); _renderRafId = null; }
+    return _renderActiveRouteNow();
+  }
+  if (_renderRafId) return;
+  _renderRafId = requestAnimationFrame(_renderActiveRouteNow);
 }
 
 // ============================================================================
@@ -1659,7 +1723,7 @@ function renderClickableLiveMatchBannerHTML() {
 
           <div class="live-score-core">
             <div class="live-score-digits">${escapeHTML(sA)} <span>:</span> ${escapeHTML(sB)}</div>
-            <div class="live-score-sub">● ИДЁТ МАТЧ</div>
+            <div class="live-score-sub" data-live-timer-match="${escapeHTML(featured.id || '')}" data-trn-id="${escapeHTML(featured.tournamentId || '')}">● ИДЁТ ИГРА: ${formatElapsedClock(getMatchElapsedMs(featured))}</div>
           </div>
 
           <div class="live-team-side right">
@@ -2171,7 +2235,7 @@ function renderPlayerProfileSection() {
               ${clan ? `<span class="glass-pill-badge" style="cursor:pointer;" onclick="window.viewClanProfile('${clan.id}')">[${escapeHTML(clan.tag)}] ${escapeHTML(clan.name)}</span>` : ''}
               <span class="cp-badge-pill">${getCPEmblemSVG(14)} ${cpVal} CP</span>
             </div>
-            <h2 style="font-family:var(--font-display); font-size:23px; font-weight:900; color:#ffffff; line-height:1.15;">${escapeHTML(targetUser.nick)}</h2>
+            <h2 style="font-family:var(--font-display); font-size:23px; font-weight:900; color:#ffffff; line-height:1.15;">${escapeHTML(targetUser.nick)}${renderUserBadgesHTML(targetUser)}</h2>
             <div style="margin-top:10px;">
               ${targetUser.so2ProfileLink ? `<a href="${escapeHTML(targetUser.so2ProfileLink)}" target="_blank" rel="noopener" class="so2-compact-emblem-btn">${getSO2EmblemSVG(15)} <span>STANDOFF 2</span></a>` : `<button type="button" class="so2-compact-emblem-btn" onclick="${isOwnProfile ? 'window.toggleEditPlayerProfile(true)' : ''}">${getSO2EmblemSVG(15)} <span>STANDOFF 2</span></button>`}
             </div>
@@ -2934,6 +2998,7 @@ function findMatchInTournament(trn, matchId) {
 }
 
 function syncLiveMatchesRegistry() {
+  const prevFeatured = new Set(cloudMatches.filter(x => x.featuredOnHome).map(x => x.id));
   const activeList = [];
   cloudTournaments.forEach(t => {
     if (!t.bracketData) return;
@@ -2945,14 +3010,22 @@ function syncLiveMatchesRegistry() {
             tournamentId: t.id,
             tournamentName: t.name,
             format: t.format,
-            teamA: m.teamA ? m.teamA.name : "TBD",
-            teamB: m.teamB ? m.teamB.name : "TBD",
-            avatarA: m.teamA ? m.teamA.avatar : "",
-            avatarB: m.teamB ? m.teamB.avatar : "",
-            score: `${m.scoreA} : ${m.scoreB}`,
+            teamA: m.teamA || { name: "TBD", avatar: "" },
+            teamB: m.teamB || { name: "TBD", avatar: "" },
+            scoreA: m.scoreA || 0,
+            scoreB: m.scoreB || 0,
+            score: `${m.scoreA || 0} : ${m.scoreB || 0}`,
             map: m.map || "Sandstone",
             lobbyId: m.lobbyId || "",
-            status: m.status
+            status: m.status,
+            featuredOnHome: Boolean(m.featuredOnHome || prevFeatured.has(m.id)),
+            startedAt: m.startedAt || null,
+            finishedAt: m.finishedAt || null,
+            pausedAt: m.pausedAt || null,
+            pausedAccumMs: m.pausedAccumMs || 0,
+            isPaused: Boolean(m.isPaused),
+            durationSec: m.durationSec,
+            durationFormatted: m.durationFormatted || ""
           });
         }
       });
@@ -3186,20 +3259,34 @@ window.openMatchControlModal = (tId, matchId) => {
   renderTournamentsSection();
 };
 
-window.playerCallRefereeInMatch = (tId, matchId) => {
-  if (!currentUser) return window.goRoute("/authorization");
+window.submitCallRefereeModal = (e, tId, matchId) => {
+  e.preventDefault();
+  const reason = (document.getElementById("call-ref-reason-inp")?.value || "").trim();
+  if (!reason) return;
   const trn = cloudTournaments.find(t => t.id === tId);
   const match = trn ? findMatchInTournament(trn, matchId) : null;
-  if (!trn || !match) return;
-  const reason = prompt("Укажите причину вызова судьи (например: соперник не заходит в лобби / подозрение на читы):", "Соперник не заходит в лобби");
-  if (!reason || !reason.trim()) return;
+  if (!trn || !match || !currentUser) return;
   match.status = "disputed";
-  match.disputeReason = `${currentUser.nick}: ${reason.trim()}`;
-  appendTournamentAuditLog(trn, `Вызов судьи (${match.teamA?.name || 'A'} vs ${match.teamB?.name || 'B'}): ${reason.trim()}`);
+  match.disputeReason = `${currentUser.nick}: ${reason}`;
+  appendTournamentAuditLog(trn, `Вызов судьи (${getMatchSideName(match.teamA)} vs ${getMatchSideName(match.teamB)}): ${reason}`);
   syncLiveMatchesRegistry();
   syncArenaDataToCloud();
   renderAllStageSections();
+  window.closeSiteGlassModal();
   window.showMirrorToast("Судья вызван! Матч переведён в статус СПОРНЫЙ.");
+};
+window.playerCallRefereeInMatch = (tId, matchId) => {
+  if (!currentUser) return window.goRoute("/authorization");
+  openSiteGlassModal(
+    "ВЫЗВАТЬ ГЛАВНОГО СУДЬЮ",
+    `
+      <form onsubmit="window.submitCallRefereeModal(event, '${tId}', '${matchId}')" style="display:flex; flex-direction:column; gap:10px;">
+        <div style="font-size:11.5px; color:var(--white-soft);">Опишите причину спора (неявка в лобби, неверный счёт, подозрение на нарушение):</div>
+        <textarea id="call-ref-reason-inp" class="auth-input" rows="3" style="padding:10px 12px;" required>Соперник не заходит в лобби</textarea>
+        <button type="submit" class="auth-submit-btn">ОТПРАВИТЬ ВЫЗОВ СУДЬЕ</button>
+      </form>
+    `
+  );
 };
 
 window.checkInAllParticipantsByChief = (tId) => {
@@ -3864,7 +3951,7 @@ function renderTournamentsSection() {
           <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
             <div style="display:flex; gap:7px; flex-wrap:wrap;">
               <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:7px 14px; font-size:10px;" onclick="window.closeTournamentDetails()">← К списку турниров</button>
-              <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:7px 13px; font-size:10px;" onclick="window.shareTournamentLink('${trn.id}')"><i class="fas fa-share-alt" style="color:var(--accent-soft);"></i> Поделиться</button>
+              <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:7px 13px; font-size:10px;" onclick="window.openTournamentInviteModal('${trn.id}')"><i class="fas fa-share-alt" style="color:var(--accent-soft);"></i> Пригласить / Ссылка</button>
             </div>
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
               ${isChief ? `<span class="rbac-badge-chief"><i class="fas fa-gavel"></i> ГЛАВНЫЙ СУДЬЯ</span>` : (isMod ? `<span class="rbac-badge-mod"><i class="fas fa-shield-alt"></i> МОДЕРАТОР СЕТКИ</span>` : '')}
@@ -4662,7 +4749,7 @@ function renderChatSection() {
               <div class="chat-bubble ${mine ? 'is-mine' : ''}">
                 <div style="display:flex; align-items:center; gap:7px; margin-bottom:3px; font-size:10.5px;">
                   <img src="${escapeHTML(m.avatar)}" style="width:18px; height:18px; border-radius:50%; object-fit:cover; cursor:pointer;" onclick="window.viewPlayerProfile('${m.uid}')">
-                  <b style="color:${m.isAdmin ? '#fde047' : 'var(--accent-soft)'}; cursor:pointer;" onclick="window.viewPlayerProfile('${m.uid}')">${m.tag ? `[${escapeHTML(m.tag)}] ` : ''}${escapeHTML(m.nick)}</b>
+                  <b style="color:${m.isAdmin ? '#fde047' : 'var(--accent-soft)'}; cursor:pointer;" onclick="window.viewPlayerProfile('${m.uid}')">${m.tag ? `[${escapeHTML(m.tag)}] ` : ''}${escapeHTML(m.nick)}${renderUserBadgesHTML(cloudUsers.find(x => x.uid === m.uid))}</b>
                   <span style="color:var(--white-dim); font-size:9.5px;">${escapeHTML(m.time)}</span>
                 </div>
                 <div style="color:#ffffff;">${escapeHTML(m.text)}</div>
@@ -4748,7 +4835,7 @@ function renderClanProfileSection() {
           <div class="so2-avatar-stage esports-avatar-frame" ${isMyClan ? 'onclick="window.triggerPhoneClanAvatarUpload()"' : ''}><img src="${escapeHTML(targetClan.logo)}" alt="Clan Logo">${isMyClan ? `<div class="so2-avatar-upload-badge"><i class="fas fa-camera"></i></div>` : ''}</div>
           <div>
             <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;"><span class="cp-badge-pill">${getCPEmblemSVG(14)} ${targetClan.cp || 0} CP</span><span class="glass-pill-badge" style="color:var(--emerald-bright);">● ROSTER READY</span></div>
-            <h2 style="font-family:var(--font-display); font-size:24px; font-weight:900; color:#ffffff;"><span style="color:var(--accent-soft);">[${escapeHTML(targetClan.tag)}]</span> ${escapeHTML(targetClan.name)}</h2>
+            <h2 style="font-family:var(--font-display); font-size:24px; font-weight:900; color:#ffffff;"><span style="color:var(--accent-soft);">[${escapeHTML(targetClan.tag)}]</span> ${escapeHTML(targetClan.name)}${renderClanBadgeHTML(targetClan)}</h2>
             <div style="font-size:12px; color:var(--white-soft); margin-top:4px;">Лидер: <b>${escapeHTML(targetClan.leaderNick)}</b> • Состав: <b>${(targetClan.members || []).length} / 7</b></div>
           </div>
         </div>
@@ -4931,7 +5018,7 @@ function renderLeaderboardSection() {
         <span class="cp-badge-pill">${getCPEmblemSVG(13)} LIVE CP RATING</span>
       </div>
 
-      ${leaderboardTab === "players" ? `<div style="display:flex; flex-direction:column; gap:10px;">${sortedPlayers.map((u, idx) => { const c = getPlayerClan(u); const wr = u.stats?.matchesPlayed > 0 ? Math.round((u.stats.wins / u.stats.matchesPlayed) * 100) : 0; return `<div class="lb-row-card" onclick="window.viewPlayerProfile('${u.uid}')"><div style="display:flex; align-items:center; gap:14px;">${buildRankBadge(idx)}<img src="${escapeHTML(u.avatar)}" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:1.5px solid var(--accent-bright);"><div><div style="font-family:var(--font-display); font-size:13.5px; font-weight:900;">${escapeHTML(u.nick)}</div><div style="font-size:11px; color:var(--white-dim);">${c ? `[${escapeHTML(c.tag)}] ${escapeHTML(c.name)}` : 'Свободный агент'} • W/R ${wr}%</div></div></div><div style="display:flex; align-items:center; gap:8px;"><span class="glass-pill-badge">K/D ${escapeHTML(u.stats?.kd || '0.00')}</span><span class="cp-badge-pill">${getCPEmblemSVG(13)} ${u.cp || 0} CP</span></div></div>`; }).join("")}</div>` : (sortedClans.length === 0 ? `<div class="glass-subcard" style="text-align:center; padding:26px; font-size:12.5px; color:var(--white-dim);">Команды ещё не зарегистрированы (0).</div>` : `<div style="display:flex; flex-direction:column; gap:10px;">${sortedClans.map((c, idx) => { const wr = c.matches > 0 ? Math.round((c.wins / c.matches) * 100) : 0; return `<div class="lb-row-card" onclick="window.viewClanProfile('${c.id}')"><div style="display:flex; align-items:center; gap:14px;">${buildRankBadge(idx)}<img src="${escapeHTML(c.logo)}" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:1.5px solid var(--accent-bright);"><div><div style="font-family:var(--font-display); font-size:13.5px; font-weight:900;"><span style="color:var(--accent-soft);">[${escapeHTML(c.tag)}]</span> ${escapeHTML(c.name)}</div><div style="font-size:11px; color:var(--white-dim);">Бойцов: ${(c.members || []).length}/7 • W/R ${wr}%</div></div></div><div style="display:flex; align-items:center; gap:8px;"><span class="glass-pill-badge">K/D ${escapeHTML(c.kd || '0.00')}</span><span class="cp-badge-pill">${getCPEmblemSVG(13)} ${c.cp || 0} CP</span></div></div>`; }).join("")}</div>`)}
+      ${leaderboardTab === "players" ? `<div style="display:flex; flex-direction:column; gap:10px;">${sortedPlayers.map((u, idx) => { const c = getPlayerClan(u); const wr = u.stats?.matchesPlayed > 0 ? Math.round((u.stats.wins / u.stats.matchesPlayed) * 100) : 0; return `<div class="lb-row-card" onclick="window.viewPlayerProfile('${u.uid}')"><div style="display:flex; align-items:center; gap:14px;">${buildRankBadge(idx)}<img src="${escapeHTML(u.avatar)}" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:1.5px solid var(--accent-bright);"><div><div style="font-family:var(--font-display); font-size:13.5px; font-weight:900;">${escapeHTML(u.nick)}${renderUserBadgesHTML(u)}</div><div style="font-size:11px; color:var(--white-dim);">${c ? `[${escapeHTML(c.tag)}] ${escapeHTML(c.name)}` : 'Свободный агент'} • W/R ${wr}%</div></div></div><div style="display:flex; align-items:center; gap:8px;"><span class="glass-pill-badge">K/D ${escapeHTML(u.stats?.kd || '0.00')}</span><span class="cp-badge-pill">${getCPEmblemSVG(13)} ${u.cp || 0} CP</span></div></div>`; }).join("")}</div>` : (sortedClans.length === 0 ? `<div class="glass-subcard" style="text-align:center; padding:26px; font-size:12.5px; color:var(--white-dim);">Команды ещё не зарегистрированы (0).</div>` : `<div style="display:flex; flex-direction:column; gap:10px;">${sortedClans.map((c, idx) => { const wr = c.matches > 0 ? Math.round((c.wins / c.matches) * 100) : 0; return `<div class="lb-row-card" onclick="window.viewClanProfile('${c.id}')"><div style="display:flex; align-items:center; gap:14px;">${buildRankBadge(idx)}<img src="${escapeHTML(c.logo)}" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:1.5px solid var(--accent-bright);"><div><div style="font-family:var(--font-display); font-size:13.5px; font-weight:900;"><span style="color:var(--accent-soft);">[${escapeHTML(c.tag)}]</span> ${escapeHTML(c.name)}${renderClanBadgeHTML(c)}</div><div style="font-size:11px; color:var(--white-dim);">Бойцов: ${(c.members || []).length}/7 • W/R ${wr}%</div></div></div><div style="display:flex; align-items:center; gap:8px;"><span class="glass-pill-badge">K/D ${escapeHTML(c.kd || '0.00')}</span><span class="cp-badge-pill">${getCPEmblemSVG(13)} ${c.cp || 0} CP</span></div></div>`; }).join("")}</div>`)}
     </div>
   `;
 }
@@ -4964,7 +5051,7 @@ function renderTeamsListOnly() {
               <div style="display:flex; align-items:center; gap:11px;">
                 <img src="${escapeHTML(c.logo)}" style="width:44px; height:44px; border-radius:50%; object-fit:cover; border:1.5px solid var(--accent-bright);">
                 <div>
-                  <div style="font-family:var(--font-display); font-size:13px; font-weight:900;"><span style="color:var(--accent-soft);">[${escapeHTML(c.tag)}]</span> ${escapeHTML(c.name)}</div>
+                  <div style="font-family:var(--font-display); font-size:13px; font-weight:900;"><span style="color:var(--accent-soft);">[${escapeHTML(c.tag)}]</span> ${escapeHTML(c.name)}${renderClanBadgeHTML(c)}</div>
                   <div style="font-size:11px; color:var(--white-dim);">Бойцов: ${(c.members || []).length}/7 • K/D ${escapeHTML(c.kd || '0.00')} • ${c.cp || 0} CP</div>
                 </div>
               </div>
@@ -5129,26 +5216,45 @@ window.adminApproveIdChange = (uid) => {
   window.showMirrorToast(`Смена ID для ${u.nick} разблокирована!`);
 };
 
+window.submitAdminEditStatsModal = (e, uid) => {
+  e.preventDefault();
+  if (!currentUser || !currentUser.isAdmin) return;
+  const u = cloudUsers.find(x => x.uid === uid);
+  if (!u) return;
+  const cpNum = Math.max(0, parseInt(document.getElementById("adm-ed-cp")?.value || "0", 10) || 0);
+  const k = Math.max(0, parseInt(document.getElementById("adm-ed-k")?.value || "0", 10) || 0);
+  const d = Math.max(0, parseInt(document.getElementById("adm-ed-d")?.value || "0", 10) || 0);
+  const w = Math.max(0, parseInt(document.getElementById("adm-ed-w")?.value || "0", 10) || 0);
+  const l = Math.max(0, parseInt(document.getElementById("adm-ed-l")?.value || "0", 10) || 0);
+  u.cp = cpNum; u.kills = k; u.deaths = d; u.wins = w; u.losses = l; u.matchesPlayed = w + l;
+  u.stats = { ...(u.stats || {}), kills: k, deaths: d, wins: w, losses: l, matchesPlayed: w + l, kd: d > 0 ? (k / d).toFixed(2) : k.toFixed(2) };
+  window.closeSiteGlassModal();
+  syncArenaDataToCloud();
+  renderAllStageSections();
+  window.showMirrorToast(`Статистика игрока ${u.nick} обновлена (${cpNum} CP).`);
+};
+
 window.adminEditPlayerStats = (uid) => {
   if (!currentUser || !currentUser.isAdmin) return;
   const u = cloudUsers.find(x => x.uid === uid);
   if (!u) return;
-  const cpVal = prompt(`Новый баланс CP для ${u.nick} (сейчас ${u.cp || 0}):`, String(u.cp || 0));
-  if (cpVal === null) return;
-  const killsVal = prompt(`Убийств (Kills) для ${u.nick}:`, String(u.stats?.kills ?? u.kills ?? 0));
-  const deathsVal = prompt(`Смертей (Deaths) для ${u.nick}:`, String(u.stats?.deaths ?? u.deaths ?? 0));
-  const winsVal = prompt(`Побед (Wins) для ${u.nick}:`, String(u.stats?.wins ?? u.wins ?? 0));
-  const lossesVal = prompt(`Поражений (Losses) для ${u.nick}:`, String(u.stats?.losses ?? u.losses ?? 0));
-  const cpNum = Math.max(0, parseInt(cpVal, 10) || 0);
-  const k = Math.max(0, parseInt(killsVal, 10) || 0);
-  const d = Math.max(0, parseInt(deathsVal, 10) || 0);
-  const w = Math.max(0, parseInt(winsVal, 10) || 0);
-  const l = Math.max(0, parseInt(lossesVal, 10) || 0);
-  u.cp = cpNum; u.kills = k; u.deaths = d; u.wins = w; u.losses = l; u.matchesPlayed = w + l;
-  u.stats = { ...(u.stats || {}), kills: k, deaths: d, wins: w, losses: l, matchesPlayed: w + l, kd: d > 0 ? (k / d).toFixed(2) : k.toFixed(2) };
-  syncArenaDataToCloud();
-  renderAllStageSections();
-  window.showMirrorToast(`Статистика игрока ${u.nick} обновлена (${cpNum} CP).`);
+  openSiteGlassModal(
+    `СТАТИСТИКА И CP: ${escapeHTML(u.nick)}`,
+    `
+      <form onsubmit="window.submitAdminEditStatsModal(event, '${u.uid}')" style="display:flex; flex-direction:column; gap:10px;">
+        <div><label class="auth-label">Баланс CP</label><input type="number" id="adm-ed-cp" class="auth-input" style="padding:9px 12px;" min="0" value="${u.cp || 0}" required></div>
+        <div class="c6e-modal-field-row">
+          <div><label class="auth-label">Убийства (Kills)</label><input type="number" id="adm-ed-k" class="auth-input" style="padding:9px 12px;" min="0" value="${u.stats?.kills ?? u.kills ?? 0}"></div>
+          <div><label class="auth-label">Смерти (Deaths)</label><input type="number" id="adm-ed-d" class="auth-input" style="padding:9px 12px;" min="0" value="${u.stats?.deaths ?? u.deaths ?? 0}"></div>
+        </div>
+        <div class="c6e-modal-field-row">
+          <div><label class="auth-label">Победы (Wins)</label><input type="number" id="adm-ed-w" class="auth-input" style="padding:9px 12px;" min="0" value="${u.stats?.wins ?? u.wins ?? 0}"></div>
+          <div><label class="auth-label">Поражения (Losses)</label><input type="number" id="adm-ed-l" class="auth-input" style="padding:9px 12px;" min="0" value="${u.stats?.losses ?? u.losses ?? 0}"></div>
+        </div>
+        <button type="submit" class="auth-submit-btn">СОХРАНИТЬ СТАТИСТИКУ</button>
+      </form>
+    `
+  );
 };
 
 window.adminToggleUserAdmin = (uid) => {
@@ -5688,7 +5794,7 @@ function renderLoginSection() {
               <div class="auth-label-row"><label class="auth-label">Пароль</label><span class="auth-show-hide-txt" onclick="window.toggleAuthPasswordVisibility()">Показать/Скрыть</span></div>
               <div class="auth-input-box"><i class="fas fa-lock auth-input-icon-left"></i><input type="${isPasswordVisible ? 'text' : 'password'}" id="reg-password-inp" class="auth-input" placeholder="Cyber7" oninput="window.liveValidateRegisterForm()" required><i class="far ${isPasswordVisible ? 'fa-eye' : 'fa-eye-slash'} auth-input-icon-right" onclick="window.toggleAuthPasswordVisibility()"></i></div>
               <div class="validation-checklist">
-                <div class="val-rule" id="val-pass-chars"><i class="fas fa-circle" style="font-size:10px;"></i> <span>Только латиница и цифры, минимум 4 символа</span></div>
+                <div class="val-rule" id="val-pass-chars"><i class="fas fa-circle" style="font-size:10px;"></i> <span>Только латиница и цифры, минимум 6 символов</span></div>
                 <div class="val-rule" id="val-pass-upper"><i class="fas fa-circle" style="font-size:10px;"></i> <span>Минимум 1 заглавная буква (A-Z)</span></div>
                 <div class="val-rule" id="val-pass-lower"><i class="fas fa-circle" style="font-size:10px;"></i> <span>Минимум 1 строчная буква (a-z)</span></div>
                 <div class="val-rule" id="val-pass-digit"><i class="fas fa-circle" style="font-size:10px;"></i> <span>Минимум 1 цифра (0-9)</span></div>
@@ -5725,15 +5831,29 @@ window.toggleAuthPasswordVisibility = () => {
   isPasswordVisible = !isPasswordVisible;
   ["login-password-inp", "reg-password-inp", "reg-password-confirm-inp"].forEach(id => { const el = document.getElementById(id); if (el) el.type = isPasswordVisible ? "text" : "password"; });
 };
-window.handleForgotPasswordClick = async () => {
-  const email = (prompt("Введите Email вашего аккаунта для сброса пароля:") || "").trim().toLowerCase();
-  if (!email || !email.includes("@")) return;
+window.submitForgotPasswordModal = async (e) => {
+  e.preventDefault();
+  const email = (document.getElementById("forgot-email-inp")?.value || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) return window.showMirrorToast("Введите корректный Email!", true);
   try {
     await sendPasswordResetEmail(auth, email);
+    window.closeSiteGlassModal();
     window.showMirrorToast("Письмо для сброса пароля отправлено на вашу почту!");
   } catch (err) {
-    window.showMirrorToast("Не удалось отправить сброс пароля. Проверьте правильность Email.", true);
+    window.showMirrorToast("Не удалось отправить сброс пароля. Проверьте Email.", true);
   }
+};
+window.handleForgotPasswordClick = () => {
+  openSiteGlassModal(
+    "СБРОС ПАРОЛЯ",
+    `
+      <form onsubmit="window.submitForgotPasswordModal(event)" style="display:flex; flex-direction:column; gap:10px;">
+        <div style="font-size:11.5px; color:var(--white-soft);">Введите Email вашего аккаунта — мы отправим ссылку для восстановления:</div>
+        <input type="email" id="forgot-email-inp" class="auth-input" style="padding:10px 12px;" placeholder="you@example.com" required>
+        <button type="submit" class="auth-submit-btn">ОТПРАВИТЬ ПИСЬМО</button>
+      </form>
+    `
+  );
 };
 
 function completeUserSessionLogin(userObj, remember = true, isNewRegistration = false) {
@@ -5939,7 +6059,10 @@ window.loginWithSocialPlatform = async (platform) => {
   const nodes = Array.from({ length: count }, () => ({ x: Math.random() * width, y: Math.random() * height, vx: (Math.random() - 0.5) * 0.36, vy: (Math.random() - 0.5) * 0.36, r: Math.random() * 1.8 + 0.7, isAccent: Math.random() > 0.35 }));
   let lastTime = performance.now(), frameSamples = [];
   function stepFrame(now) {
-    const deltaMs = now - lastTime; lastTime = now;
+    if (document.hidden) { lastTime = now; return requestAnimationFrame(stepFrame); }
+    const deltaMs = now - lastTime;
+    if (deltaMs < 32) return requestAnimationFrame(stepFrame);
+    lastTime = now;
     if (deltaMs > 3 && deltaMs < 50 && frameSamples.length < 30) {
       frameSamples.push(deltaMs);
       if (frameSamples.length === 30) { const hz = Math.round(1000 / (frameSamples.reduce((a, b) => a + b, 0) / 30)); detectedRefreshHz = hz >= 130 ? 144 : (hz >= 105 ? 120 : (hz >= 80 ? 90 : 60)); }
