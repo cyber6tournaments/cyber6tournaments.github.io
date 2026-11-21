@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="black-orange">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#020202">
+  <meta name="description" content="Cyber 6 Tournament — Турнирная организация по дисциплине STANDOFF 2.">
+  <title>CYBER 6 — TOURNAMENT</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="style.css?v=23">
+</head>
+<body>
+
+<input type="file" id="phonePlayerAvatarInput" accept="image/*" style="display:none;">
+<input type="file" id="phoneProfileBannerInput" accept="image/*" style="display:none;">
+<input type="file" id="phoneClanAvatarInput" accept="image/*" style="display:none;">
+<input type="file" id="phoneClanBannerInput" accept="image/*" style="display:none;">
+<input type="file" id="matchTabScreenshotInput" accept="image/*" style="display:none;">
+<input type="file" id="tournamentBannerInput" accept="image/*" style="display:none;">
+
+<canvas id="c6e-120fps-canvas"></canvas>
+
+<div class="so2-bg-composition">
+  <div class="so2-tactical-grid"></div>
+  <div class="so2-diagonal-lines"></div>
+  <div class="so2-ambient-orb orb-left"></div>
+  <div class="so2-ambient-orb orb-right"></div>
+  <div class="so2-bg-logo-stage">
+    <div class="so2-bg-logo-ring"></div>
+    <img src="Logotip.png" alt="CYBER 6 Background Logo" class="so2-bg-logo-img">
+  </div>
+</div>
+
+<div id="mirror-toast-container"></div>
+<div id="tab-lightbox-backdrop" class="tab-lightbox-backdrop" onclick="window.closeTabLightbox()"><img id="tab-lightbox-img" class="tab-lightbox-img" alt="Скриншот Таба"></div>
+
+<!-- ФИКСИРОВАННАЯ ВЕРХНЯЯ ШТОРКА -->
+<header class="mirror-topbar">
+  <div class="mirror-topbar-inner">
+    <a href="/feed" class="topbar-brand" onclick="window.goRoute('/feed', event)">
+      <div class="topbar-logo-wrap">
+        <img src="Logotip.png" alt="CYBER 6" class="topbar-logo-img">
+      </div>
+      <div>
+        <div class="topbar-title-main">CYBER 6</div>
+        <div class="topbar-title-sub">TOURNAMENT</div>
+      </div>
+    </a>
+
+    <nav class="desktop-glass-nav" id="desktop-top-nav">
+      <button type="button" class="desktop-nav-link active" data-route="/feed" onclick="window.goRoute('/feed', event)">
+        Главная
+      </button>
+      <button type="button" class="desktop-nav-link" data-route="/teams" onclick="window.goRoute('/teams', event)">
+        Команды
+      </button>
+      <button type="button" class="desktop-nav-link" data-route="/leaderboard" onclick="window.goRoute('/leaderboard', event)">
+        Лидеры
+      </button>
+      <button type="button" class="desktop-nav-link" data-route="/tournaments" onclick="window.goRoute('/tournaments', event)">
+        <i class="fas fa-trophy" style="color:var(--accent-soft); font-size:11px;"></i> Турниры
+      </button>
+      <button type="button" class="desktop-nav-link" data-route="/matches" onclick="window.goRoute('/matches', event)">
+        Матчи
+      </button>
+      <button type="button" class="desktop-nav-link" data-route="/schedule" onclick="window.goRoute('/schedule', event)">
+        Расписание
+      </button>
+      <button type="button" class="desktop-nav-link" onclick="window.toggleGlassMoreModal(event)" title="Еще разделы и смена темы">
+        <div class="dots-9-grid">
+          <span></span><span></span><span></span>
+          <span></span><span></span><span></span>
+          <span></span><span></span><span></span>
+        </div>
+        Еще
+      </button>
+    </nav>
+
+    <!-- ПРАВЫЙ ВЕРХНИЙ УГОЛ: [АВАТАРКА] Ник / [Тег] Название клана -->
+    <div class="topbar-player-cluster">
+      <button type="button" class="topbar-icon-btn" id="top-chat-btn" onclick="window.goRoute('/chat')" title="Общий и личный чат">
+        <i class="fas fa-comments"></i>
+      </button>
+      <button type="button" class="topbar-icon-btn" id="top-notif-btn" onclick="window.toggleNotificationsModal(event)" title="Уведомления">
+        <i class="fas fa-bell"></i>
+        <span class="notif-count-dot" id="top-notif-badge">0</span>
+      </button>
+      <div class="player-profile-pill" id="top-player-pill" onclick="window.handleTopProfileClick()" title="Открыть профиль игрока">
+        <div class="player-avatar-wrap" id="top-player-frame">
+          <img src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed=C6E" id="top-player-avatar" alt="Avatar" class="player-avatar-img">
+          <span class="player-status-dot guest" id="top-player-dot"></span>
+        </div>
+        <div class="player-meta-text">
+          <span class="player-nick-text" id="top-player-nick">Гость</span>
+          <span class="player-role-sub" id="top-player-sub"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="arena-stage-wrap">
+  <section id="sec-home" class="stage-section active">
+    <div id="home-showcase-root"></div>
+  </section>
+
+  <section id="sec-teams" class="stage-section">
+    <div id="teams-stage-root"></div>
+  </section>
+
+  <section id="sec-leaderboard" class="stage-section">
+    <div id="leaderboard-stage-root"></div>
+  </section>
+
+  <section id="sec-clan" class="stage-section">
+    <div id="clan-stage-root"></div>
+  </section>
+
+  <section id="sec-tournaments" class="stage-section">
+    <div id="tournaments-stage-root"></div>
+  </section>
+
+  <section id="sec-matches" class="stage-section">
+    <div id="matches-stage-root"></div>
+  </section>
+
+  <section id="sec-schedule" class="stage-section">
+    <div id="schedule-stage-root"></div>
+  </section>
+
+  <section id="sec-profile" class="stage-section">
+    <div id="profile-stage-root"></div>
+  </section>
+
+  <section id="sec-organizer" class="stage-section">
+    <div id="organizer-stage-root"></div>
+  </section>
+
+  <section id="sec-chat" class="stage-section">
+    <div id="chat-stage-root"></div>
+  </section>
+
+  <section id="sec-more" class="stage-section">
+    <div id="more-stage-root"></div>
+  </section>
+
+  <section id="sec-login" class="stage-section">
+    <div id="login-stage-root"></div>
+  </section>
+  <footer class="c6e-site-footer" id="c6e-official-footer">
+    <div class="c6e-footer-top">
+      <div class="c6e-footer-brand">
+        <img src="Logotip.png" alt="Cyber 6 Tournament" onerror="this.style.display='none'">
+        <div>
+          <div style="font-family:var(--font-display); font-size:13px; font-weight:900; letter-spacing:1px; color:#ffffff;">CYBER 6 TOURNAMENT</div>
+          <div style="font-size:10.5px; color:var(--white-dim);">Турнирная платформа по дисциплине STANDOFF 2</div>
+        </div>
+      </div>
+      <div class="c6e-footer-links">
+        <button type="button" class="c6e-footer-link" onclick="window.goRoute('/rules')">Регламент</button>
+        <button type="button" class="c6e-footer-link" onclick="window.goRoute('/support')">Поддержка</button>
+        <a class="c6e-footer-link" href="https://t.me/cyber6esports" target="_blank" rel="noopener">CYBER 6 Telegram</a>
+        <a class="c6e-footer-link" href="https://t.me/kas_0ff" target="_blank" rel="noopener">Разработчик @kas_0ff</a>
+      </div>
+    </div>
+    <div class="c6e-footer-bottom">
+      <span>© 2026 CYBER 6 Organization · Все права защищены.</span>
+      <span>Основатель и разработчик: <b style="color:#ffffff;">Kas</b> · Standoff 2 Esports</span>
+    </div>
+  </footer>
+</main>
+
+<!-- ЦЕНТР УВЕДОМЛЕНИЙ -->
+<div class="glass-drawer-backdrop" id="glass-notif-backdrop" onclick="window.closeNotificationsModal(event)">
+  <div class="glass-more-window" onclick="event.stopPropagation()">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+      <div>
+        <div style="font-family:var(--font-display); font-size:10px; font-weight:800; color:var(--accent-soft); letter-spacing:2px;">NOTIFICATIONS // C6E</div>
+        <div style="font-family:var(--font-display); font-size:16px; font-weight:900; color:#ffffff; margin-top:2px;">УВЕДОМЛЕНИЯ</div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button type="button" class="social-auth-btn" style="flex:0 0 auto; padding:6px 10px; font-size:9.5px;" onclick="window.markAllNotificationsRead()">Прочитать все</button>
+        <button type="button" onclick="window.closeNotificationsModal()" style="width:32px; height:32px; border-radius:10px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.06); color:#fff; cursor:pointer;">✕</button>
+      </div>
+    </div>
+    <div id="glass-notif-list" style="display:flex; flex-direction:column; gap:8px; max-height:60vh; overflow-y:auto;"></div>
+  </div>
+</div>
+
+<!-- СТЕКЛЯННОЕ ОКНО «ЕЩЕ» (9 ТОЧЕК) + СМЕНА ТЕМЫ -->
+<div class="glass-drawer-backdrop" id="glass-more-backdrop" onclick="window.closeGlassMoreModal(event)">
+  <div class="glass-more-window" onclick="event.stopPropagation()">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+      <div>
+        <div style="font-family:var(--font-display); font-size:10px; font-weight:800; color:var(--accent-soft); letter-spacing:2px;">
+          NAVIGATION // C6E
+        </div>
+        <div style="font-family:var(--font-display); font-size:16px; font-weight:900; color:#ffffff; margin-top:2px;">
+          РАЗДЕЛЫ И ОФОРМЛЕНИЕ
+        </div>
+      </div>
+      <button type="button" onclick="window.closeGlassMoreModal()" style="width:34px; height:34px; border-radius:10px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.06); color:#fff; cursor:pointer; font-size:14px;">
+        ✕
+      </button>
+    </div>
+
+    <div class="glass-more-grid" id="glass-more-tiles-container"></div>
+    <div class="theme-switcher-box" id="glass-theme-switcher-container"></div>
+  </div>
+</div>
+
+<!-- НИЖНЯЯ НАВИГАЦИОННАЯ ПАНЕЛЬ (7 КНОПОК — «ТУРНИРЫ» СТРОГО ПО ЦЕНТРУ!) -->
+<nav class="mirror-bottom-dock" id="mirror-bottom-nav">
+  <button type="button" class="mirror-dock-btn active" data-route="/feed" onclick="window.goRoute('/feed', event)">
+    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z"></path>
+    </svg>
+    <span>Главная</span>
+  </button>
+
+  <button type="button" class="mirror-dock-btn" data-route="/teams" onclick="window.goRoute('/teams', event)">
+    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3z"></path>
+      <path d="M9 12l2 2 4-4"></path>
+    </svg>
+    <span>Команды</span>
+  </button>
+
+  <button type="button" class="mirror-dock-btn" data-route="/leaderboard" onclick="window.goRoute('/leaderboard', event)">
+    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 20h16"></path>
+      <path d="M6 20v-7h3v7"></path>
+      <path d="M10.5 20V8h3v12"></path>
+      <path d="M15 20v-4h3v4"></path>
+    </svg>
+    <span>Лидеры</span>
+  </button>
+
+  <button type="button" class="mirror-dock-center" data-route="/tournaments" onclick="window.goRoute('/tournaments', event)">
+    <div class="mirror-dock-center-orb">
+      <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
+        <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
+        <path d="M4 22h16"></path>
+        <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path>
+        <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path>
+        <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path>
+      </svg>
+    </div>
+    <span class="mirror-dock-center-lbl">Турниры</span>
+  </button>
+
+  <button type="button" class="mirror-dock-btn" data-route="/matches" onclick="window.goRoute('/matches', event)">
+    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"></circle>
+      <line x1="12" y1="3" x2="12" y2="7"></line>
+      <line x1="12" y1="17" x2="12" y2="21"></line>
+      <line x1="3" y1="12" x2="7" y2="12"></line>
+      <line x1="17" y1="12" x2="21" y2="12"></line>
+      <circle cx="12" cy="12" r="2"></circle>
+    </svg>
+    <span>Матчи</span>
+  </button>
+
+  <button type="button" class="mirror-dock-btn" data-route="/schedule" onclick="window.goRoute('/schedule', event)">
+    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+      <line x1="16" y1="2" x2="16" y2="6"></line>
+      <line x1="8" y1="2" x2="8" y2="6"></line>
+      <line x1="3" y1="10" x2="21" y2="10"></line>
+    </svg>
+    <span>График</span>
+  </button>
+
+  <button type="button" class="mirror-dock-btn" id="dock-more-btn" onclick="window.toggleGlassMoreModal(event)">
+    <div class="dots-9-grid">
+      <span></span><span></span><span></span>
+      <span></span><span></span><span></span>
+      <span></span><span></span><span></span>
+    </div>
+    <span>Еще</span>
+  </button>
+</nav>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script type="module" src="app.js?v=23"></script>
+</body>
+</html>
